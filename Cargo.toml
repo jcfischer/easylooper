@@ -1,0 +1,20 @@
+[package]
+name = "echolooper"
+version = "0.1.0"
+authors = ["Jens-Christian Fischer <jens-christian.fischer@switch.ch>"]
+
+[dependencies]
+vst = { git = 'https://github.com/rust-dsp/rust-vst' }
+easyvst = { git = 'https://github.com/Boscop/easyvst' }
+rand = "0.3"
+time = "0.1.40"
+log = "*"
+log-panics = "*"
+simplelog = "*"
+
+[dev-dependencies]
+
+
+[lib]
+name = "echolooper"
+crate-type = ["cdylib"]
