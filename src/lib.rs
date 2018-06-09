@@ -79,17 +79,20 @@ impl ELPlugin {
     fn process_one_channel<F: Float + AsPrim>(&mut self, input: &[F], output: &mut [F],
                                               channel: usize) {
 
+        info!("processing channel: {:}", channel);
         let state = &mut self.state.user_state;
 
         let buffer = [&mut state.buffer_l, &mut state.buffer_r];
+        let mut i = state.index;
         if state.recording {
 
             for input in input.iter() {
-                buffer[channel][state.index] = input.as_f32();
-                state.index += 1;
-                state.index = state.index % 102400;
+                info!("index: {:}",i);
+                buffer[channel][i] = input.as_f32();
+                i += 1;
+                i %= 102400;
             }
-            info!("index: {:}", state.index);
+
 
         }
 
@@ -136,7 +139,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         // #[cfg(not(windows))] let my_folder = ::std::env::home_dir().unwrap();
         #[cfg(not(windows))] let my_folder = ::std::path::PathBuf::from("/Users/fischer/Desktop");
         ;
-        let log_file = File::create(my_folder.join("plexlooper1.log")).unwrap();
+        let log_file = File::create(my_folder.join("plexlooper3.log")).unwrap();
         use std::fs::File;
 
         let _ = CombinedLogger::init(vec![WriteLogger::new(LogLevelFilter::Info,
@@ -158,6 +161,9 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         for (i, (input_buffer, output_buffer)) in buffer.zip().enumerate() {
             self.process_one_channel(input_buffer, output_buffer, i);
         }
+
+        self.state.user_state.index += 512;
+        self.state.user_state.index %= 102400;
 
 
         use vst::event::Event;
