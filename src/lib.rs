@@ -81,16 +81,16 @@ impl ELPlugin {
 
         let state = &mut self.state.user_state;
 
-        let buffer = [&state.buffer_l, &state.buffer_r];
+        let buffer = [&mut state.buffer_l, &mut state.buffer_r];
         if state.recording {
-            let size = input.len();
-            let index = state.index;
-            info!("size {:?}", size);
-            info!("index: {:}", index);
-            let size = input.len();
-            let to = index + size;
-            let buf_slice_l = buffer[channel];
-            // buf_slice_l[index..to].copy_from_slice(&[input]);
+
+            for input in input.iter() {
+                buffer[channel][state.index] = input.as_f32();
+                state.index += 1;
+                state.index = state.index % 102400;
+            }
+            info!("index: {:}", state.index);
+
         }
 
         for (input_sample, output_sample) in input.iter().zip(output) {
@@ -102,7 +102,7 @@ impl ELPlugin {
 impl EasyVst<ParamId, ELState> for ELPlugin {
     fn params() -> Vec<ParamDef> {
         vec![
-            ParamDef::new("Gain1", -48.0, 12.0, 0.0),
+            ParamDef::new("Gain2", -48.0, 12.0, 0.0),
         ]
     }
 
