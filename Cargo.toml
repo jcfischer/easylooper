@@ -1,5 +1,5 @@
 [package]
-name = "echolooper"
+name = "easylooper"
 version = "0.1.0"
 authors = ["Jens-Christian Fischer <jens-christian.fischer@switch.ch>"]
 
@@ -11,10 +11,13 @@ time = "0.1.40"
 log = "*"
 log-panics = "*"
 simplelog = "*"
+num-traits = "*"
+asprim = "*"
+
 
 [dev-dependencies]
 
 
 [lib]
-name = "echolooper"
+name = "easylooper"
 crate-type = ["cdylib"]

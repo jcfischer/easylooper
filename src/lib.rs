@@ -1,198 +1,193 @@
 #[macro_use]
 extern crate vst;
+#[macro_use]
 extern crate easyvst;
-extern crate time;
+#[macro_use]
 extern crate log;
 extern crate log_panics;
 extern crate simplelog;
+extern crate num_traits;
+extern crate asprim;
 
 
 use simplelog::*;
 
-use vst::plugin::{Info, Plugin, Category};
-use vst::buffer::AudioBuffer;
+use num_traits::Float;
+use asprim::AsPrim;
+
+use vst::plugin::{Info, Category, HostCallback, CanDo};
+use vst::buffer::{AudioBuffer, SendEventBuffer};
+use vst::host::Host;
+use vst::api::Events;
+
 
 use easyvst::*;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use std::mem;
-use std::collections::VecDeque;
-use std::f64::consts::PI;
+easyvst!(ParamId, ELState, ELPlugin);
 
-fn delay(index: usize, mut size: f32) -> isize {
-    const SIZE_OFFSET: f32 = 0.06;
-    const SIZE_MULT: f32 = 1_000.0;
-
-    size += SIZE_OFFSET;
-
-    const SPREAD: f32 = 0.3;
-
-    let base = size * SIZE_MULT;
-    let mult = (index as f32 * SPREAD) + 1.0;
-    let offset = if index > 2 { base * SPREAD / 2.0 } else { 0.0 };
-
-    (base * mult + offset) as isize
-
+#[repr(usize)]
+#[derive(Debug, Copy, Clone)]
+pub enum ParamId {
+    GainDb,
 }
 
-
+/// A left channel and right channel sample.
 type SamplePair = (f32, f32);
 
-struct EchoLooper {
-    buffers: Vec<VecDeque<SamplePair>>,
-    dry_wet: f32,
-    size: f32,
-
+#[derive(Default)]
+struct ELState {
+    my_folder: PathBuf,
+    gain_amp: f32,
+    send_buffer: SendEventBuffer,
+    buffer_l: Vec<f32>,
+    buffer_r: Vec<f32>,
+    index: usize,
+    // current index in loop
+    recording: bool,
 }
 
-impl Default for EchoLooper {
-    fn default() -> EchoLooper {
-        EchoLooper::new(0.12, 0.66)
-    }
-}
-
-impl EchoLooper {
-    fn new(size: f32, dry_wet: f32) -> EchoLooper {
-        const NUM_DELAYS: usize = 4;
-
-        let mut buffers = Vec::new();
-
-        // generate Delay buffers
-        for i in 0..NUM_DELAYS {
-            let samples = delay(i, size);
-            let mut buffer = VecDeque::with_capacity(samples as usize);
-
-            for _ in 0..samples {
-                buffer.push_back((0.0, 0.0));
-            }
-
-            buffers.push(buffer);
+impl UserState<ParamId> for ELState {
+    fn param_changed(&mut self, _host: &mut HostCallback, param_id: ParamId, val: f32) {
+        info!("param_changed {:?} {:2}", param_id, val);
+        use ParamId::*;
+        match param_id {
+            GainDb => self.gain_amp = db_to_amp(val),
         }
-
-        EchoLooper {
-            buffers: buffers,
-            dry_wet: dry_wet,
-            size: size,
-        }
-
     }
 
-    fn resize(&mut self, n: f32) {
-        let old_size = mem::replace(&mut self.size, n);
-
-        for (i, buffer) in self.buffers.iter_mut().enumerate() {
-            let old_delay = delay(i, old_size);
-            let new_delay = delay(i, n);
-
-            let diff = new_delay - old_delay;
-
-            if diff > 0 {
-                for _ in 0..diff {
-                    buffer.push_back((0.0, 0.0));
-                }
-            } else if diff < 0 {
-                for _ in 0..-diff {
-                    let _ = buffer.pop_front();
-                }
-            }
+    fn format_param(&self, param_id: ParamId, val: f32) -> String {
+        // info!("format_param {:?} {:.2}", param_id, val);
+        use ParamId::*;
+        match param_id {
+            GainDb => format!("{:.2} dB", val),
         }
     }
 }
-impl Plugin for EchoLooper {
+
+type ELPluginState = PluginState<ParamId, ELState>;
+
+#[derive(Default)]
+struct ELPlugin {
+    state: ELPluginState,
+
+    // ui: Option<UiState>
+}
+
+impl ELPlugin {
+    fn process_one_channel<F: Float + AsPrim>(&mut self, input: &[F], output: &mut [F],
+                                              channel: usize) {
+
+        let state = &mut self.state.user_state;
+
+        let buffer = [&state.buffer_l, &state.buffer_r];
+        if state.recording {
+            let size = input.len();
+            let index = state.index;
+            info!("size {:?}", size);
+            info!("index: {:}", index);
+            let size = input.len();
+            let to = index + size;
+            let buf_slice_l = buffer[channel];
+            // buf_slice_l[index..to].copy_from_slice(&[input]);
+        }
+
+        for (input_sample, output_sample) in input.iter().zip(output) {
+            *output_sample = *input_sample * state.gain_amp.as_();
+        }
+    }
+}
+
+impl EasyVst<ParamId, ELState> for ELPlugin {
+    fn params() -> Vec<ParamDef> {
+        vec![
+            ParamDef::new("Gain1", -48.0, 12.0, 0.0),
+        ]
+    }
+
+    fn state(&self) -> &ELPluginState { &self.state }
+
+    fn state_mut(&mut self) -> &mut ELPluginState { &mut self.state }
+
     fn get_info(&self) -> Info {
         Info {
-            name: "EchoLooper".to_string(),
+            name: "Easy Looper".to_string(),
             vendor: "SunMachines".to_string(),
+            unique_id: 0x87a93b3,
+            category: Category::Effect,
 
             inputs: 2,
             outputs: 2,
-            category: Category::Effect,
-            version: 0002,
-            parameters: 2,
+            parameters: 1,
 
-            // random
-            unique_id: 1359,
-            ..Default::default()
+            ..Info::default()
         }
     }
 
-    fn get_parameter(&self, index: i32) -> f32 {
-        match index {
-            0 => self.size,
-            1 => self.dry_wet,
-            _ => 0.0,
-        }
+    fn new(state: ELPluginState) -> Self {
+        let mut p: ELPlugin = Default::default();
+        p.state = state;
+        p
     }
 
-    fn get_parameter_text(&self, index: i32) -> String {
-        match index {
-            0 => "Length",
-            1 => "Dry/Wet",
-            _ => "",
-        }.to_string()
+    fn init(&mut self) {
+        #[cfg(windows)] let my_folder = fs::get_folder_path().unwrap();
+        // #[cfg(not(windows))] let my_folder = ::std::env::home_dir().unwrap();
+        #[cfg(not(windows))] let my_folder = ::std::path::PathBuf::from("/Users/fischer/Desktop");
+        ;
+        let log_file = File::create(my_folder.join("plexlooper1.log")).unwrap();
+        use std::fs::File;
+
+        let _ = CombinedLogger::init(vec![WriteLogger::new(LogLevelFilter::Info,
+                                                           Config::default(), log_file)]);
+        info!("init in host {:?}", self.state.host.get_info());
+        info!("my folder {:?}", my_folder);
+
+        let state = &mut self.state.user_state;
+        state.buffer_l = Vec::with_capacity(102400);
+        state.buffer_r = Vec::with_capacity(102400);
+        state.index = 0;
+        state.recording = true;
+        state.my_folder = my_folder;
+        info!("Init Done");
     }
 
-    fn set_parameter(&mut self, index: i32, val: f32) {
-        match index {
-            0 => self.resize(val),
-            1 => self.dry_wet = val,
-            _ => (),
-        }
-    }
+    fn process<T: Float + AsPrim>(&mut self, events: &Events, buffer: &mut AudioBuffer<T>) {
 
-
-    fn process(&mut self, buffer: &mut AudioBuffer<f32>) {
-
-        let (inputs, mut outputs) = buffer.split();
-
-        if inputs.len() < 2 || outputs.len() < 2 {
-            return;
+        for (i, (input_buffer, output_buffer)) in buffer.zip().enumerate() {
+            self.process_one_channel(input_buffer, output_buffer, i);
         }
 
-        // iterate over inputs as (&f32, &f32)
-        let (l, r) = inputs.split_at(1);
-        let stereo_in = l[0].iter().zip(r[0].iter());
 
-        // iterate over outputs
-        let (mut l, mut r) = outputs.split_at_mut(1);
-        let stereo_out = l[0].iter_mut().zip(r[0].iter_mut());
+        use vst::event::Event;
 
-
-        for ((left_in, right_in), (left_out, right_out)) in stereo_in.zip(stereo_out) {
-            for buffer in &mut self.buffers {
-                buffer.push_back((*left_in, *right_in));
+        let events = events.events().filter_map(|e| {
+            match e {
+                Event::Midi(e) => Some(e),
+                _ => None
             }
-
-            let mut left_processed = 0.0;
-            let mut right_processed = 0.0;
-
-            let time_s = time::precise_time_ns() as f64 / 1_000_000_000.0;
-
-            for (n, buffer) in self.buffers.iter_mut().enumerate() {
-                if let Some((left_old, right_old)) = buffer.pop_front() {
-                    const LFO_FREQ: f64 = 0.5;
-                    const WET_MULT: f32 = 0.66;
-
-                    let offset = 0.25 * (n % 4) as f64;
-
-                    let lfo = ((time_s * LFO_FREQ + offset) * PI * 2.0).sin() as f32;
-
-                    let wet = self.dry_wet * WET_MULT;
-                    let mono = (left_old + right_old) / 2.0;
-
-                    left_processed  += mono * wet * lfo;
-                    right_processed += -mono * wet * lfo;
-                }
-            }
-
-            *left_out = *left_in + left_processed;
-            *right_out = * right_in + right_processed;
-        }
-
+        });
+        self.state.user_state.send_buffer.send_events(events, &mut self.state.host)
     }
 
+    fn can_do(&self, can_do: CanDo) -> vst::api::Supported {
+        use vst::api::Supported::*;
+        use vst::plugin::CanDo::*;
+
+        match can_do {
+            SendEvents | SendMidiEvent | ReceiveEvents | ReceiveMidiEvent => Yes,
+            _ => No,
+        }
+    }
 }
 
-plugin_main!(EchoLooper);
+#[inline]
+pub fn amp_to_db<F: Float + AsPrim>(x: F) -> F {
+    20.0.as_::<F>() * x.log10()
+}
 
+#[inline]
+pub fn db_to_amp<F: Float + AsPrim>(x: F) -> F {
+    10.0.as_::<F>().powf(x / 20.0.as_())
+}
