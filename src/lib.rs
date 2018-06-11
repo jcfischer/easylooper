@@ -21,11 +21,16 @@ use vst::host::Host;
 use vst::api::{self};
 use vst::event::MidiEvent;
 
-use std::collections::VecDeque;
+
 
 use easyvst::*;
 
 use std::path::PathBuf;
+
+mod recording_buffer;
+
+use recording_buffer::*;
+
 
 easyvst!(ParamId, ELState, ELPlugin);
 
@@ -35,25 +40,19 @@ pub enum ParamId {
     GainDb,
 }
 
-type SamplePair = (f32, f32);
-
-struct RecordingBuffer {
-    buffer: VecDeque<SamplePair>
+enum Commands {
+    Record,
+    Overdub,
 }
 
-impl RecordingBuffer {
-    fn new() -> RecordingBuffer {
-        RecordingBuffer::with_size(102400)
-    }
-
-    fn with_size(size: usize) -> RecordingBuffer {
-        let mut buffer = VecDeque::with_capacity(size);
-        for _ in 0..size {
-            buffer.push_back( (0.0, 0.0));
-        }
-        RecordingBuffer { buffer: buffer }
-    }
+struct Command {
+    note: u8, // the midi note this command is bound to
+    command: Commands,
 }
+
+
+
+
 
 #[derive(Default)]
 struct ELState {
@@ -211,13 +210,6 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             *right_out = *right_in + right_processed.as_();
 
         }
-
-//        if state.recording && buffer.len() > 96000  {
-//            state.recording = false;
-//            state.loop_len = buffer.len();
-//            info!("stopped recording");
-//        }
-
 
 
         use vst::event::Event;
