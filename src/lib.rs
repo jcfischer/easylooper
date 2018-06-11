@@ -21,15 +21,15 @@ use vst::host::Host;
 use vst::api::{self};
 use vst::event::MidiEvent;
 
-
-
 use easyvst::*;
 
 use std::path::PathBuf;
 
 mod recording_buffer;
-
 use recording_buffer::*;
+
+mod looper_fsm;
+use looper_fsm::*;
 
 
 easyvst!(ParamId, ELState, ELPlugin);
@@ -40,10 +40,8 @@ pub enum ParamId {
     GainDb,
 }
 
-enum Commands {
-    Record,
-    Overdub,
-}
+
+
 
 struct Command {
     note: u8, // the midi note this command is bound to
@@ -64,6 +62,7 @@ struct ELState {
     loop_len: usize,
     // current index in loop
     recording: bool,
+    state: LooperState,
     events: Vec<MidiEvent>,
 }
 
@@ -158,6 +157,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         state.buffers = buffers;
 
         state.loop_index = 0;  // which loop buffer are we recording to?
+        state.state = LooperState::Stopped;
         state.recording = false;
         state.my_folder = my_folder;
         state.events = Vec::with_capacity(1024);
@@ -224,7 +224,8 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                         info!("Pitch: {}", pitch);
                         if pitch == A3_PITCH {
                             state.recording = !state.recording;
-                            info!("recording: {}", state.recording);
+                            state.state = looper_cycle(state.state, Commands::Record);
+                            info!("state: {}", state.state);
                             info!("Size Buffer {}: {}", state.loop_index, buffer.buffer.len());
                         }
                     }
