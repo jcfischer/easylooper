@@ -61,7 +61,6 @@ struct ELState {
     loop_index: usize,
     loop_len: usize,
     // current index in loop
-    recording: bool,
     state: LooperState,
     events: Vec<MidiEvent>,
 }
@@ -158,7 +157,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
 
         state.loop_index = 0;  // which loop buffer are we recording to?
         state.state = LooperState::Stopped;
-        state.recording = false;
+
         state.my_folder = my_folder;
         state.events = Vec::with_capacity(1024);
         info!("Init Done");
@@ -192,19 +191,22 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             let mut left_processed: f32 = 0.0;
             let mut right_processed: f32 = 0.0;
             // Push the new samples into the loop buffers.
-            if state.recording {
-
-                buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
-
-            } else {
-                if let Some((left_old, right_old)) = buffer.buffer.pop_front() {
-                    buffer.buffer.push_back((left_old, right_old));
-                    const WET_MULT: f32 = 0.66;
-
-                    left_processed = left_old * WET_MULT;
-                    right_processed = right_old * WET_MULT;
+            match state.state {
+                LooperState::Recording => {
+                    buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
                 }
+                LooperState::Playing => {
+                    if let Some((left_old, right_old)) = buffer.buffer.pop_front() {
+                        buffer.buffer.push_back((left_old, right_old));
+                        const WET_MULT: f32 = 0.66;
+
+                        left_processed = left_old * WET_MULT;
+                        right_processed = right_old * WET_MULT;
+                    }
+                }
+                _ => { }
             }
+
 
             *left_out = *left_in + left_processed.as_();
             *right_out = *right_in + right_processed.as_();
@@ -216,18 +218,28 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
 
         for e in events.events() {
             const A3_PITCH: u8 = 69;
+            const G3_PITCH: u8 = 67;
+            const F3_PITCH: u8 = 65;
             match e {
                 Event::Midi(mut ev) => {
                     info!("Midi Event: {:?}", status(ev.data[0]));
                     if status(ev.data[0]) == Status::NoteOn {
                         let pitch = ev.data[1];
                         info!("Pitch: {}", pitch);
-                        if pitch == A3_PITCH {
-                            state.recording = !state.recording;
-                            state.state = looper_cycle(state.state, Commands::Record);
-                            info!("state: {}", state.state);
-                            info!("Size Buffer {}: {}", state.loop_index, buffer.buffer.len());
+                        match pitch {
+                            A3_PITCH => {
+                                state.state = looper_cycle(state.state, Commands::Record);
+                            }
+                            G3_PITCH => {
+                                state.state = looper_cycle(state.state, Commands::Stop);
+                            }
+                            F3_PITCH => {
+                                state.state = looper_cycle(state.state, Commands::Play);
+                            }
+                            _ => { }
                         }
+                        info!("new state: {}", state.state);
+                        info!("Size Buffer {}: {}", state.loop_index, buffer.buffer.len());
                     }
                     state.events.push(ev);
                 }
