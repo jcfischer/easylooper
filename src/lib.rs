@@ -37,12 +37,30 @@ pub enum ParamId {
 
 type SamplePair = (f32, f32);
 
+struct RecordingBuffer {
+    buffer: VecDeque<SamplePair>
+}
+
+impl RecordingBuffer {
+    fn new() -> RecordingBuffer {
+        RecordingBuffer::with_size(102400)
+    }
+
+    fn with_size(size: usize) -> RecordingBuffer {
+        let mut buffer = VecDeque::with_capacity(size);
+        for _ in 0..size {
+            buffer.push_back( (0.0, 0.0));
+        }
+        RecordingBuffer { buffer: buffer }
+    }
+}
+
 #[derive(Default)]
 struct ELState {
     my_folder: PathBuf,
     gain_amp: f32,
     send_buffer: SendEventBuffer,
-    buffers: Vec<VecDeque<SamplePair>>,
+    buffers: Vec<RecordingBuffer>,
     loop_index: usize,
     loop_len: usize,
     // current index in loop
@@ -132,19 +150,14 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         let mut buffers = Vec::new();
 
         for _i in 0..NUM_BUFFERS {
-            let samples = 102400;
-            let mut buffer = VecDeque::with_capacity(samples);
+            let buffer = RecordingBuffer::new();
 
-            for _ in 0..samples {
-                buffer.push_back( (0.0, 0.0));
-            }
             buffers.push(buffer);
         }
 
         let state = &mut self.state.user_state;
         state.buffers = buffers;
-//        state.buffer_l = VecDeque::with_capacity(102400);
-//        state.buffer_r = VecDeque::with_capacity(102400);
+
         state.loop_index = 0;  // which loop buffer are we recording to?
         state.recording = false;
         state.my_folder = my_folder;
@@ -182,11 +195,11 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             // Push the new samples into the loop buffers.
             if state.recording {
 
-                buffer.push_back((left_in.as_f32(), right_in.as_f32()));
+                buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
 
             } else {
-                if let Some((left_old, right_old)) = buffer.pop_front() {
-                    buffer.push_back((left_old, right_old));
+                if let Some((left_old, right_old)) = buffer.buffer.pop_front() {
+                    buffer.buffer.push_back((left_old, right_old));
                     const WET_MULT: f32 = 0.66;
 
                     left_processed = left_old * WET_MULT;
@@ -210,16 +223,17 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         use vst::event::Event;
 
         for e in events.events() {
-            const A4_PITCH: u8 = 69;
+            const A3_PITCH: u8 = 69;
             match e {
                 Event::Midi(mut ev) => {
                     info!("Midi Event: {:?}", status(ev.data[0]));
                     if status(ev.data[0]) == Status::NoteOn {
                         let pitch = ev.data[1];
                         info!("Pitch: {}", pitch);
-                        if pitch == A4_PITCH {
+                        if pitch == A3_PITCH {
                             state.recording = !state.recording;
                             info!("recording: {}", state.recording);
+                            info!("Size Buffer {}: {}", state.loop_index, buffer.buffer.len());
                         }
                     }
                     state.events.push(ev);
