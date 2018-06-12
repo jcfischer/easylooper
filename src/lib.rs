@@ -145,19 +145,13 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
 
         log_panics::init();
 
-        const NUM_BUFFERS: usize = 2;
-        // genearate the buffers
 
-        let mut buffers = Vec::new();
-
-        for _i in 0..NUM_BUFFERS {
-            let buffer = RecordingBuffer::new();
-
-            buffers.push(buffer);
-        }
 
         let state = &mut self.state.user_state;
-        state.buffers = buffers;
+        // genearate the buffers
+
+
+        state.buffers = ELPlugin::clear_buffers();
 
         state.loop_index = 0;  // which loop buffer are we recording to?
         state.state = LooperState::Stopped;
@@ -197,6 +191,14 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         let stereo_out = l[0].iter_mut().zip(r[0].iter_mut());
         let buffer_len = stereo_out.len();
 
+        match state.state {
+            LooperState::Clearing => {
+                state.buffers = ELPlugin::clear_buffers();
+                state.index = 0;
+                state.state = looper_cycle(state.state, Commands::Record);
+            }
+            _ => {}
+        }
         // select the buffer we are recording into
         let buffer = &mut state.buffers[state.loop_index];
 
@@ -367,7 +369,6 @@ pub enum Status {
 
 extern crate tinyui;
 
-use tinyui::*;
 
 mod ui;
 
@@ -391,5 +392,18 @@ impl Editor for ELPlugin {
     fn open(&mut self, parent: *mut c_void) {
         info!("open {}", parent as usize);
         self.window = Some(ui::PluginWindow::new(Window::new_with_parent(parent).unwrap()));
+    }
+}
+
+impl ELPlugin {
+    fn clear_buffers() -> Vec<RecordingBuffer> {
+        const NUM_BUFFERS: usize = 2;
+        let mut buffers = Vec::new();
+        for _i in 0..NUM_BUFFERS {
+            let buffer = RecordingBuffer::new();
+
+            buffers.push(buffer);
+        }
+        buffers
     }
 }

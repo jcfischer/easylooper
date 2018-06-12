@@ -6,6 +6,7 @@ use std::fmt;
 pub enum LooperState {
     Stopped,
     Recording,
+    Clearing,
     Overdubbing,
     Playing,
 }
@@ -22,6 +23,7 @@ impl fmt::Display for LooperState {
             LooperState::Recording => "Recording",
             LooperState::Playing => "Playing",
             LooperState::Overdubbing => "Overdubbing",
+            LooperState::Clearing => "Clearing",
         };
         write!(f, "{}", printable)
     }
@@ -42,24 +44,28 @@ pub fn looper_cycle(state: LooperState, command: Commands) -> LooperState {
 
     match(state, command) {
         (Stopped, Play) => Playing,
-        (Stopped, Record) => Recording,
+        (Stopped, Record) => Clearing,
         (Stopped, Overdub) => Overdubbing,
         (Stopped, _) => Stopped,
 
+        // We need to take care that the buffers are cleared before recording again
+        (Clearing, Record) => Recording,
+        (Clearing, _) => Recording,
+
         (Playing, Stop) => Stopped,
-        (Playing, Record) => Recording,
+        (Playing, Record) => Clearing,
         (Playing, Overdub) => Overdubbing,
         (Playing, _) => Playing,
 
         (Recording, Stop) => Stopped,
-        (Recording, Record) => Playing,
+        (Recording, Record) => Clearing,
         (Recording, Overdub) => Overdubbing,
         (Recording, Play) => Playing,
         (Recording, _) => Recording,
 
         (Overdubbing, Play) => Playing,
         (Overdubbing, Stop) => Stopped,
-        (Overdubbing, Record) => Recording,
+        (Overdubbing, Record) => Clearing,
         (Overdubbing, Overdub) => Playing,
         (Overdubbing, _) => Overdubbing,
     }

@@ -9,7 +9,7 @@ pub struct RecordingBuffer {
 
 impl RecordingBuffer {
     pub fn new() -> RecordingBuffer {
-        RecordingBuffer::with_size(102400)
+        RecordingBuffer::with_size(1024)
     }
 
     // create a new (empty) buffer with *size* samples
@@ -35,7 +35,7 @@ mod tests {
     fn build_new_buffer() {
         let b = RecordingBuffer::new();
 
-        assert_eq!(b.buffer.len(), 102400);
+        assert_eq!(b.buffer.len(), 1024);
     }
 
     #[test]
