@@ -190,15 +190,26 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
 
             let mut left_processed: f32 = 0.0;
             let mut right_processed: f32 = 0.0;
-            // Push the new samples into the loop buffers.
+
             match state.state {
                 LooperState::Recording => {
+                    // Push the new samples into the loop buffers.
                     buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
+                }
+                LooperState::Overdubbing => {
+                    if let Some((left_old, right_old)) = buffer.buffer.pop_front() {
+                        const WET_MULT: f32 = 0.98;
+
+                        left_processed = left_old * WET_MULT + left_in.as_f32();
+                        right_processed = right_old * WET_MULT + right_in.as_f32();
+
+                        buffer.buffer.push_back((left_processed, right_processed));
+                    }
                 }
                 LooperState::Playing => {
                     if let Some((left_old, right_old)) = buffer.buffer.pop_front() {
                         buffer.buffer.push_back((left_old, right_old));
-                        const WET_MULT: f32 = 0.66;
+                        const WET_MULT: f32 = 0.98;
 
                         left_processed = left_old * WET_MULT;
                         right_processed = right_old * WET_MULT;
@@ -208,8 +219,8 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             }
 
 
-            *left_out = *left_in + left_processed.as_();
-            *right_out = *right_in + right_processed.as_();
+            *left_out = left_processed.as_();
+            *right_out = right_processed.as_();
 
         }
 
@@ -220,6 +231,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             const A3_PITCH: u8 = 69;
             const G3_PITCH: u8 = 67;
             const F3_PITCH: u8 = 65;
+            const E3_PITCH: u8 = 64;
             match e {
                 Event::Midi(mut ev) => {
                     info!("Midi Event: {:?}", status(ev.data[0]));
@@ -235,6 +247,9 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                             }
                             F3_PITCH => {
                                 state.state = looper_cycle(state.state, Commands::Play);
+                            }
+                            E3_PITCH => {
+                                state.state = looper_cycle(state.state, Commands::Overdub);
                             }
                             _ => { }
                         }
