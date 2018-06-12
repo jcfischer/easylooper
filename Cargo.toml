@@ -8,7 +8,7 @@ vst = { git = 'https://github.com/rust-dsp/rust-vst' }
 easyvst = { git = 'https://github.com/Boscop/easyvst' }
 rand = "0.3"
 time = "0.1.40"
-log = "*"
+log = "0.3.0"
 log-panics = "*"
 simplelog = "*"
 num-traits = "*"
@@ -23,3 +23,7 @@ tinyui = { git = 'https://github.com/jcfischer/tinyui-rs.git' }
 [lib]
 name = "easylooper"
 crate-type = ["cdylib"]
+
+[[bin]]
+name = "standalone"
+path = "./src/standalone.rs"

@@ -9,7 +9,6 @@ extern crate simplelog;
 extern crate num_traits;
 extern crate asprim;
 
-
 use simplelog::*;
 
 use num_traits::Float;
@@ -27,11 +26,14 @@ use easyvst::*;
 use std::path::{Path, PathBuf};
 
 mod recording_buffer;
+
 use recording_buffer::*;
 
 mod looper_fsm;
+
 use looper_fsm::*;
 
+use tinyui::*;
 
 easyvst!(ParamId, ELState, ELPlugin);
 
@@ -42,15 +44,11 @@ pub enum ParamId {
 }
 
 
-
-
 struct Command {
-    note: u8, // the midi note this command is bound to
+    note: u8,
+    // the midi note this command is bound to
     command: Commands,
 }
-
-
-
 
 
 #[derive(Default)]
@@ -61,6 +59,11 @@ struct ELState {
     buffers: Vec<RecordingBuffer>,
     loop_index: usize,
     loop_len: usize,
+    index: usize,
+    // the playback position
+    seconds: String,
+    // display current position in seconds
+    sample_rate: f64,
     // current index in loop
     state: LooperState,
     events: Vec<MidiEvent>,
@@ -93,9 +96,7 @@ struct ELPlugin {
     window: Option<ui::PluginWindow>,
 }
 
-impl ELPlugin {
-
-}
+impl ELPlugin {}
 
 impl EasyVst<ParamId, ELState> for ELPlugin {
     fn params() -> Vec<ParamDef> {
@@ -137,10 +138,12 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         let log_file = File::create(my_folder.join("plexlooper.log")).unwrap();
         use std::fs::File;
 
-        let _ = CombinedLogger::init(vec![WriteLogger::new(LogLevelFilter::Info,
+        let _ = CombinedLogger::init(vec![WriteLogger::new(LevelFilter::Info,
                                                            Config::default(), log_file)]);
         info!("init in host {:?}", self.state.host.get_info());
         info!("my folder {:?}", my_folder);
+
+        log_panics::init();
 
         const NUM_BUFFERS: usize = 2;
         // genearate the buffers
@@ -158,7 +161,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
 
         state.loop_index = 0;  // which loop buffer are we recording to?
         state.state = LooperState::Stopped;
-
+        state.index = 0;
         state.my_folder = my_folder;
         state.events = Vec::with_capacity(1024);
         info!("Init Done");
@@ -168,8 +171,14 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         Some(self)
     }
 
-    fn process<T: Float + AsPrim>(&mut self, events: &api::Events, buffer: &mut AudioBuffer<T>) {
+    fn set_sample_rate(&mut self, fs: f32) {
+        info!("set_sample_rate: {}", fs);
+        let fs = fs as f64;
+        let state = &mut self.state.user_state;
+        state.sample_rate = fs;
+    }
 
+    fn process<T: Float + AsPrim>(&mut self, events: &api::Events, buffer: &mut AudioBuffer<T>) {
         let state = &mut self.state.user_state;
 
         let (inputs, mut outputs) = buffer.split();
@@ -186,13 +195,12 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         // Iterate over outputs as (&mut f32, &mut f32)
         let (mut l, mut r) = outputs.split_at_mut(1);
         let stereo_out = l[0].iter_mut().zip(r[0].iter_mut());
+        let buffer_len = stereo_out.len();
 
         // select the buffer we are recording into
         let buffer = &mut state.buffers[state.loop_index];
 
         for ((left_in, right_in), (left_out, right_out)) in stereo_in.zip(stereo_out) {
-
-
             let mut left_processed: f32 = 0.0;
             let mut right_processed: f32 = 0.0;
 
@@ -209,6 +217,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                         right_processed = right_old * WET_MULT + right_in.as_f32();
 
                         buffer.buffer.push_back((left_processed, right_processed));
+                        state.index += buffer_len;
                     }
                 }
                 LooperState::Playing => {
@@ -220,14 +229,22 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                         right_processed = right_old * WET_MULT;
                     }
                 }
-                _ => { }
+                _ => {}
             }
 
 
             *left_out = left_processed.as_();
             *right_out = right_processed.as_();
-
         }
+
+        match state.state {
+            LooperState::Recording | LooperState::Overdubbing | LooperState::Playing => {
+                state.index += buffer_len;
+                state.index = state.index % buffer.length();
+            }
+            _ => {}
+        }
+
 
 
         use vst::event::Event;
@@ -256,10 +273,31 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                             E3_PITCH => {
                                 state.state = looper_cycle(state.state, Commands::Overdub);
                             }
-                            _ => { }
+                            _ => {}
                         }
                         info!("new state: {}", state.state);
                         info!("Size Buffer {}: {}", state.loop_index, buffer.buffer.len());
+                        match self.window {
+                            Some(window) => {
+                                match state.state {
+                                    LooperState::Recording | LooperState::Overdubbing => {
+                                        window.state_label.set_text_color(Color::red());
+                                        window.counter.set_text_color(Color::red());
+                                    }
+                                    LooperState::Playing => {
+                                        window.state_label.set_text_color(Color::green());
+                                        window.counter.set_text_color(Color::green());
+                                    }
+                                    LooperState::Stopped => {
+                                        window.state_label.set_text_color(Color::black());
+                                        window.counter.set_text_color(Color::black());
+                                    }
+                                    _ => {}
+                                }
+                                window.state_label.set_text(&state.state.to_string());
+                            }
+                            _ => {}
+                        };
                     }
                     state.events.push(ev);
                 }
@@ -268,6 +306,18 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         }
 
         // state.send_buffer.send_events(events, &mut self.state.host)
+
+        match self.window {
+            Some(window) => {
+                let seconds = state.index as f64 / state.sample_rate;
+                let seconds = format!("{:.*}", 2, seconds);
+                if seconds != state.seconds {
+                    window.counter.set_text(&seconds.to_string());
+                    state.seconds = seconds;
+                }
+            }
+            _ => {}
+        };
     }
 
     fn can_do(&self, can_do: CanDo) -> vst::api::Supported {
@@ -303,17 +353,20 @@ pub enum Status {
     MIDITimeCodeQtrFrame = 0xF1,
     SongPositionPointer = 0xF2,
     SongSelect = 0xF3,
-    TuneRequest = 0xF6, // F4 anf 5 are reserved and unused
+    TuneRequest = 0xF6,
+    // F4 anf 5 are reserved and unused
     SysExEnd = 0xF7,
     TimingClock = 0xF8,
     Start = 0xFA,
     Continue = 0xFB,
     Stop = 0xFC,
-    ActiveSensing = 0xFE, // FD also res/unused
+    ActiveSensing = 0xFE,
+    // FD also res/unused
     SystemReset = 0xFF,
 }
 
 extern crate tinyui;
+
 use tinyui::*;
 
 mod ui;
@@ -321,24 +374,22 @@ mod ui;
 use std::os::raw::c_void;
 
 
-
 const WINDOW_WIDTH: u32 = 640;
 const WINDOW_HEIGHT: u32 = 480;
 
 impl Editor for ELPlugin {
-    fn size(&self) -> (i32, i32) {  (WINDOW_WIDTH as i32, WINDOW_HEIGHT as i32)  }
+    fn size(&self) -> (i32, i32) { (WINDOW_WIDTH as i32, WINDOW_HEIGHT as i32) }
 
-    fn position(&self) -> (i32, i32) {  (0, 0)  }
+    fn position(&self) -> (i32, i32) { (0, 0) }
 
-    fn close(&mut self) { self.window = None;  }
+    fn close(&mut self) { self.window = None; }
 
-    fn idle(&mut self) {    }
+    fn idle(&mut self) {}
 
-    fn is_open(&mut self) -> bool {  self.window.is_some()  }
+    fn is_open(&mut self) -> bool { self.window.is_some() }
 
     fn open(&mut self, parent: *mut c_void) {
         info!("open {}", parent as usize);
         self.window = Some(ui::PluginWindow::new(Window::new_with_parent(parent).unwrap()));
     }
-
 }
