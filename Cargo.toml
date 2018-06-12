@@ -13,6 +13,8 @@ log-panics = "*"
 simplelog = "*"
 num-traits = "*"
 asprim = "*"
+tinyui = { git = 'https://github.com/jcfischer/tinyui-rs.git' }
+
 
 
 [dev-dependencies]

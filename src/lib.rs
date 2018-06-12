@@ -18,12 +18,13 @@ use asprim::AsPrim;
 use vst::plugin::{Info, Category, HostCallback, CanDo};
 use vst::buffer::{AudioBuffer, SendEventBuffer};
 use vst::host::Host;
+use vst::editor::Editor;
 use vst::api::{self};
 use vst::event::MidiEvent;
 
 use easyvst::*;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod recording_buffer;
 use recording_buffer::*;
@@ -37,7 +38,7 @@ easyvst!(ParamId, ELState, ELPlugin);
 #[repr(usize)]
 #[derive(Debug, Copy, Clone)]
 pub enum ParamId {
-    GainDb,
+    DryWet,
 }
 
 
@@ -55,7 +56,7 @@ struct Command {
 #[derive(Default)]
 struct ELState {
     my_folder: PathBuf,
-    gain_amp: f32,
+    dry_wet: f32,
     send_buffer: SendEventBuffer,
     buffers: Vec<RecordingBuffer>,
     loop_index: usize,
@@ -63,6 +64,7 @@ struct ELState {
     // current index in loop
     state: LooperState,
     events: Vec<MidiEvent>,
+
 }
 
 impl UserState<ParamId> for ELState {
@@ -70,15 +72,15 @@ impl UserState<ParamId> for ELState {
         info!("param_changed {:?} {:2}", param_id, val);
         use ParamId::*;
         match param_id {
-            GainDb => self.gain_amp = db_to_amp(val),
+            DryWet => self.dry_wet = val,
         }
     }
 
     fn format_param(&self, param_id: ParamId, val: f32) -> String {
-        // info!("format_param {:?} {:.2}", param_id, val);
+        info!("format_param {:?} {:.2}", param_id, val);
         use ParamId::*;
         match param_id {
-            GainDb => format!("{:.2} dB", val),
+            DryWet => format!("{:.2} ", val),
         }
     }
 }
@@ -88,8 +90,7 @@ type ELPluginState = PluginState<ParamId, ELState>;
 #[derive(Default)]
 struct ELPlugin {
     state: ELPluginState,
-
-    // ui: Option<UiState>
+    window: Option<ui::PluginWindow>,
 }
 
 impl ELPlugin {
@@ -99,7 +100,7 @@ impl ELPlugin {
 impl EasyVst<ParamId, ELState> for ELPlugin {
     fn params() -> Vec<ParamDef> {
         vec![
-            ParamDef::new("Gain2", -48.0, 12.0, 0.0),
+            ParamDef::new("DryWet", 0.0, 100.0, 50.0),
         ]
     }
 
@@ -133,7 +134,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         // #[cfg(not(windows))] let my_folder = ::std::env::home_dir().unwrap();
         #[cfg(not(windows))] let my_folder = ::std::path::PathBuf::from("/Users/fischer/Desktop");
         ;
-        let log_file = File::create(my_folder.join("plexlooper7.log")).unwrap();
+        let log_file = File::create(my_folder.join("plexlooper.log")).unwrap();
         use std::fs::File;
 
         let _ = CombinedLogger::init(vec![WriteLogger::new(LogLevelFilter::Info,
@@ -161,6 +162,10 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         state.my_folder = my_folder;
         state.events = Vec::with_capacity(1024);
         info!("Init Done");
+    }
+
+    fn get_editor(&mut self) -> Option<&mut Editor> {
+        Some(self)
     }
 
     fn process<T: Float + AsPrim>(&mut self, events: &api::Events, buffer: &mut AudioBuffer<T>) {
@@ -276,15 +281,6 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
     }
 }
 
-#[inline]
-pub fn amp_to_db<F: Float + AsPrim>(x: F) -> F {
-    20.0.as_::<F>() * x.log10()
-}
-
-#[inline]
-pub fn db_to_amp<F: Float + AsPrim>(x: F) -> F {
-    10.0.as_::<F>().powf(x / 20.0.as_())
-}
 
 fn status(b: u8) -> Status { b.into() }
 
@@ -315,4 +311,34 @@ pub enum Status {
     Stop = 0xFC,
     ActiveSensing = 0xFE, // FD also res/unused
     SystemReset = 0xFF,
+}
+
+extern crate tinyui;
+use tinyui::*;
+
+mod ui;
+
+use std::os::raw::c_void;
+
+
+
+const WINDOW_WIDTH: u32 = 640;
+const WINDOW_HEIGHT: u32 = 480;
+
+impl Editor for ELPlugin {
+    fn size(&self) -> (i32, i32) {  (WINDOW_WIDTH as i32, WINDOW_HEIGHT as i32)  }
+
+    fn position(&self) -> (i32, i32) {  (0, 0)  }
+
+    fn close(&mut self) { self.window = None;  }
+
+    fn idle(&mut self) {    }
+
+    fn is_open(&mut self) -> bool {  self.window.is_some()  }
+
+    fn open(&mut self, parent: *mut c_void) {
+        info!("open {}", parent as usize);
+        self.window = Some(ui::PluginWindow::new(Window::new_with_parent(parent).unwrap()));
+    }
+
 }
