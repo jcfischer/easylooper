@@ -14,6 +14,9 @@ use simplelog::*;
 use num_traits::Float;
 use asprim::AsPrim;
 
+use std::sync::{RwLock};
+use std::ops::{Deref, DerefMut};
+
 use vst::plugin::{Info, Category, HostCallback, CanDo};
 use vst::buffer::{AudioBuffer, SendEventBuffer};
 use vst::host::Host;
@@ -23,7 +26,7 @@ use vst::event::MidiEvent;
 
 use easyvst::*;
 
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 
 mod recording_buffer;
 
@@ -52,7 +55,7 @@ struct Command {
 
 
 #[derive(Default)]
-struct ELState {
+pub struct ELState {
     my_folder: PathBuf,
     dry_wet: f32,
     send_buffer: SendEventBuffer,
@@ -63,7 +66,7 @@ struct ELState {
     // the playback position
     seconds: String,
     // display current position in seconds
-    sample_rate: f64,
+    sample_rate: RwLock<f64>,
     // current index in loop
     state: LooperState,
     events: Vec<MidiEvent>,
@@ -169,7 +172,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         info!("set_sample_rate: {}", fs);
         let fs = fs as f64;
         let state = &mut self.state.user_state;
-        state.sample_rate = fs;
+        *state.sample_rate.write().unwrap().deref_mut() = fs;
     }
 
     fn process<T: Float + AsPrim>(&mut self, events: &api::Events, buffer: &mut AudioBuffer<T>) {
@@ -311,7 +314,8 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
 
         match self.window {
             Some(window) => {
-                let seconds = state.index as f64 / state.sample_rate;
+                let sample_rate = *state.sample_rate.read().unwrap().deref();
+                let seconds = state.index as f64 / sample_rate;
                 let seconds = format!("{:.*}", 2, seconds);
                 if seconds != state.seconds {
                     window.counter.set_text(&seconds.to_string());
