@@ -14,7 +14,7 @@ use simplelog::*;
 use num_traits::Float;
 use asprim::AsPrim;
 
-use std::sync::{RwLock};
+use std::sync::RwLock;
 use std::ops::{Deref, DerefMut};
 
 use vst::plugin::{Info, Category, HostCallback, CanDo};
@@ -26,7 +26,7 @@ use vst::event::MidiEvent;
 
 use easyvst::*;
 
-use std::path::{PathBuf};
+use std::path::PathBuf;
 
 mod recording_buffer;
 
@@ -69,6 +69,9 @@ pub struct ELState {
     sample_rate: RwLock<f64>,
     // current index in loop
     state: LooperState,
+    prev_state: LooperState,
+    // In case we need to return to the previous state after
+    // a state change
     events: Vec<MidiEvent>,
 
 }
@@ -114,7 +117,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
 
     fn get_info(&self) -> Info {
         Info {
-            name: "Easy Looper".to_string(),
+            name: "Plex Looper".to_string(),
             vendor: "SunMachines".to_string(),
             unique_id: 0x87a93b3,
             category: Category::Effect,
@@ -148,12 +151,10 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
 
         log_panics::init();
 
-
-
         let state = &mut self.state.user_state;
-        // genearate the buffers
 
 
+        // generate the buffers
         state.buffers = ELPlugin::clear_buffers();
 
         state.loop_index = 0;  // which loop buffer are we recording to?
@@ -198,7 +199,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             LooperState::Clearing => {
                 state.buffers = ELPlugin::clear_buffers();
                 state.index = 0;
-                state.state = looper_cycle(state.state, Commands::Record);
+                state.state = looper_cycle(state.state, state.prev_state, Commands::Record);
             }
             _ => {}
         }
@@ -225,6 +226,13 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                         state.index += buffer_len;
                     }
                 }
+                LooperState::Replacing => {
+                    if let Some((left_old, right_old)) = buffer.buffer.pop_front() {
+                        buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
+                        left_processed = left_in.as_f32();
+                        right_processed = right_in.as_f32();
+                    }
+                }
                 LooperState::Playing => {
                     if let Some((left_old, right_old)) = buffer.buffer.pop_front() {
                         buffer.buffer.push_back((left_old, right_old));
@@ -233,6 +241,10 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                         left_processed = left_old * WET_MULT;
                         right_processed = right_old * WET_MULT;
                     }
+                }
+                LooperState::Muted => {
+                    left_processed = 0. as f32;
+                    right_processed = 0. as f32;
                 }
                 _ => {}
             }
@@ -255,55 +267,80 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         use vst::event::Event;
 
         for e in events.events() {
-            const A3_PITCH: u8 = 69;
-            const G3_PITCH: u8 = 67;
-            const F3_PITCH: u8 = 65;
-            const E3_PITCH: u8 = 64;
+            const A3_PITCH: u8 = 69;  // Record
+            const G3_PITCH: u8 = 67;  // Stop
+            const F3_PITCH: u8 = 65;  // Play
+            const E3_PITCH: u8 = 64;  // Overdub
+            const D3_PITCH: u8 = 62;  // Replace
+            const C3_PITCH: u8 = 60;  // Mute
             match e {
                 Event::Midi(mut ev) => {
-                    info!("Midi Event: {:?}", status(ev.data[0]));
-                    if status(ev.data[0]) == Status::NoteOn {
-                        let pitch = ev.data[1];
-                        info!("Pitch: {}", pitch);
-                        match pitch {
-                            A3_PITCH => {
-                                state.state = looper_cycle(state.state, Commands::Record);
-                            }
-                            G3_PITCH => {
-                                state.state = looper_cycle(state.state, Commands::Stop);
-                            }
-                            F3_PITCH => {
-                                state.state = looper_cycle(state.state, Commands::Play);
-                            }
-                            E3_PITCH => {
-                                state.state = looper_cycle(state.state, Commands::Overdub);
-                            }
-                            _ => {}
-                        }
-                        info!("new state: {}", state.state);
-                        info!("Size Buffer {}: {}", state.loop_index, buffer.buffer.len());
-                        match self.window {
-                            Some(window) => {
-                                match state.state {
-                                    LooperState::Recording | LooperState::Overdubbing => {
-                                        window.state_label.set_text_color(Color::red());
-                                        window.counter.set_text_color(Color::red());
-                                    }
-                                    LooperState::Playing => {
-                                        window.state_label.set_text_color(Color::green());
-                                        window.counter.set_text_color(Color::green());
-                                    }
-                                    LooperState::Stopped => {
-                                        window.state_label.set_text_color(Color::black());
-                                        window.counter.set_text_color(Color::black());
-                                    }
-                                    _ => {}
+                    let midi_event = status(ev.data[0]);
+                    info!("Midi Event: {:?}", midi_event);
+
+                    match midi_event {
+                        Status::NoteOn => {
+                            let pitch = ev.data[1];
+                            info!("Pitch: {}", pitch);
+                            state.prev_state = state.state;
+                            match pitch {
+                                A3_PITCH => {
+                                    state.state = looper_cycle(state.state, state.prev_state, Commands::Record);
                                 }
-                                window.state_label.set_text(&state.state.to_string());
+                                G3_PITCH => {
+                                    state.state = looper_cycle(state.state, state.prev_state, Commands::Stop);
+                                }
+                                F3_PITCH => {
+                                    state.state = looper_cycle(state.state, state.prev_state, Commands::Play);
+                                }
+                                E3_PITCH => {
+                                    state.state = looper_cycle(state.state, state.prev_state, Commands::Overdub);
+                                }
+                                D3_PITCH => {
+                                    state.state = looper_cycle(state.state, state.prev_state, Commands::ReplaceStart);
+                                }
+                                C3_PITCH => {
+                                    state.state = looper_cycle(state.state, state.prev_state, Commands::Mute);
+                                }
+                                _ => {}
                             }
-                            _ => {}
-                        };
+
+                        }
+                        Status::NoteOff => {
+                            let pitch = ev.data[1];
+                            info!("Pitch: {}", pitch);
+                            match pitch {
+                                D3_PITCH => {
+                                    state.state = looper_cycle(state.state, state.prev_state, Commands::ReplaceStop);
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
                     }
+                    info!("new state: {}", state.state);
+                    info!("Size Buffer {}: {}", state.loop_index, buffer.buffer.len());
+                    match self.window {
+                        Some(window) => {
+                            match state.state {
+                                LooperState::Recording | LooperState::Overdubbing | LooperState::Replacing => {
+                                    window.state_label.set_text_color(Color::red());
+                                    window.counter.set_text_color(Color::red());
+                                }
+                                LooperState::Playing => {
+                                    window.state_label.set_text_color(Color::green());
+                                    window.counter.set_text_color(Color::green());
+                                }
+                                LooperState::Stopped | LooperState::Muted => {
+                                    window.state_label.set_text_color(Color::black());
+                                    window.counter.set_text_color(Color::black());
+                                }
+                                _ => {}
+                            }
+                            window.state_label.set_text(&state.state.to_string());
+                        }
+                        _ => {}
+                    };
                     state.events.push(ev);
                 }
                 _ => ()

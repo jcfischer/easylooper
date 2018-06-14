@@ -36,8 +36,8 @@ impl PluginWindow {
         // info!("building window");
         let mut app = Self {
             window: window,
-            counter: Label::new("0:00", Rect::new(10., 10., 120., 32.)),
-            state_label: Label::new("Stopped", Rect::new(10., 44., 120., 32.)),
+            counter: Label::new("0:00", Rect::new(10., 10., 120., 40. )),
+            state_label: Label::new("Stopped", Rect::new(10., 44., 120., 40. )),
             button: ButtonBuilder {
                 id: "a button",
                 text: "click me",
