@@ -1,5 +1,5 @@
 [package]
-name = "easylooper"
+name = "plexlooper"
 version = "0.1.0"
 authors = ["Jens-Christian Fischer <jens-christian.fischer@switch.ch>"]
 
@@ -21,7 +21,7 @@ tinyui = { git = 'https://github.com/jcfischer/tinyui-rs.git' }
 
 
 [lib]
-name = "easylooper"
+name = "plexlooper"
 crate-type = ["cdylib"]
 
 [[bin]]

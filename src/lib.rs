@@ -24,6 +24,9 @@ use vst::editor::Editor;
 use vst::api::{self};
 use vst::event::MidiEvent;
 
+mod version;
+use version::*;
+
 use easyvst::*;
 
 use std::path::PathBuf;
@@ -43,7 +46,7 @@ easyvst!(ParamId, ELState, ELPlugin);
 #[repr(usize)]
 #[derive(Debug, Copy, Clone)]
 pub enum ParamId {
-    DryWet,
+    Feedback,
 }
 
 
@@ -57,7 +60,7 @@ struct Command {
 #[derive(Default)]
 pub struct ELState {
     my_folder: PathBuf,
-    dry_wet: f32,
+    feedback: f32,
     send_buffer: SendEventBuffer,
     buffers: Vec<RecordingBuffer>,
     loop_index: usize,
@@ -67,7 +70,7 @@ pub struct ELState {
     seconds: String,
     // display current position in seconds
     sample_rate: RwLock<f64>,
-    // current index in loop
+
     state: LooperState,
     prev_state: LooperState,
     // In case we need to return to the previous state after
@@ -81,7 +84,7 @@ impl UserState<ParamId> for ELState {
         info!("param_changed {:?} {:2}", param_id, val);
         use ParamId::*;
         match param_id {
-            DryWet => self.dry_wet = val,
+            Feedback => self.feedback = val,
         }
     }
 
@@ -89,7 +92,7 @@ impl UserState<ParamId> for ELState {
         info!("format_param {:?} {:.2}", param_id, val);
         use ParamId::*;
         match param_id {
-            DryWet => format!("{:.2} ", val),
+            Feedback => format!("{:.2} ", val),
         }
     }
 }
@@ -107,7 +110,7 @@ impl ELPlugin {}
 impl EasyVst<ParamId, ELState> for ELPlugin {
     fn params() -> Vec<ParamDef> {
         vec![
-            ParamDef::new("DryWet", 0.0, 100.0, 50.0),
+            ParamDef::new("Feedback", 0.0, 1.0, 1.0),
         ]
     }
 
@@ -121,7 +124,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             vendor: "SunMachines".to_string(),
             unique_id: 0x87a93b3,
             category: Category::Effect,
-
+            version: Version::get_version(),
             inputs: 2,
             outputs: 2,
             parameters: 1,
@@ -211,7 +214,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             let mut right_processed: f32 = 0.0;
 
             match state.state {
-                LooperState::Recording => {
+                LooperState::Recording | LooperState::Inserting => {
                     // Push the new samples into the loop buffers.
                     buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
                 }
@@ -219,8 +222,8 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                     if let Some((left_old, right_old)) = buffer.buffer.pop_front() {
                         const WET_MULT: f32 = 0.98;
 
-                        left_processed = left_old * WET_MULT + left_in.as_f32();
-                        right_processed = right_old * WET_MULT + right_in.as_f32();
+                        left_processed = (left_old * WET_MULT) * state.feedback + left_in.as_f32();
+                        right_processed = (right_old * WET_MULT) * state.feedback + right_in.as_f32();
 
                         buffer.buffer.push_back((left_processed, right_processed));
                         state.index += buffer_len;
@@ -273,6 +276,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             const E3_PITCH: u8 = 64;  // Overdub
             const D3_PITCH: u8 = 62;  // Replace
             const C3_PITCH: u8 = 60;  // Mute
+            const B2_PITCH: u8 = 59;  // Insert
             match e {
                 Event::Midi(mut ev) => {
                     let midi_event = status(ev.data[0]);
@@ -302,6 +306,9 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                                 C3_PITCH => {
                                     state.state = looper_cycle(state.state, state.prev_state, Commands::Mute);
                                 }
+                                B2_PITCH => {
+                                    state.state = looper_cycle(state.state, state.prev_state, Commands::InsertStart);
+                                }
                                 _ => {}
                             }
 
@@ -312,6 +319,9 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                             match pitch {
                                 D3_PITCH => {
                                     state.state = looper_cycle(state.state, state.prev_state, Commands::ReplaceStop);
+                                }
+                                B2_PITCH => {
+                                    state.state = looper_cycle(state.state, state.prev_state, Commands::InsertStop);
                                 }
                                 _ => {}
                             }

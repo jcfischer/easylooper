@@ -10,6 +10,7 @@ pub enum LooperState {
     Overdubbing,
     Playing,
     Replacing,
+    Inserting,
     Muted,
 }
 
@@ -27,6 +28,7 @@ impl fmt::Display for LooperState {
             LooperState::Overdubbing => "Overdubbing",
             LooperState::Clearing => "Clearing",
             LooperState::Replacing => "Replacing",
+            LooperState::Inserting => "Inserting",
             LooperState::Muted => "Muted",
         };
         write!(f, "{}", printable)
@@ -40,6 +42,8 @@ pub enum Commands {
     Overdub,
     ReplaceStart,
     ReplaceStop,
+    InsertStart,
+    InsertStop,
     Mute,
 }
 
@@ -63,11 +67,12 @@ pub fn looper_cycle(state: LooperState, prev_state:LooperState, command: Command
         (Playing, Record) => Clearing,
         (Playing, Overdub) => Overdubbing,
         (Playing, ReplaceStart) => Replacing,
+        (Playing, InsertStart) => Inserting,
         (Playing, Mute) => Muted,
         (Playing, _) => Playing,
 
         (Recording, Stop) => Stopped,
-        (Recording, Record) => Clearing,
+        (Recording, Record) => Playing,
         (Recording, Overdub) => Overdubbing,
         (Recording, Play) => Playing,
         (Recording, _) => Recording,
@@ -80,6 +85,9 @@ pub fn looper_cycle(state: LooperState, prev_state:LooperState, command: Command
 
         (Replacing, ReplaceStop) => prev_state,
         (Replacing, _) => Replacing,
+
+        (Inserting, InsertStop) => prev_state,
+        (Inserting, _) => Inserting,
 
         (Muted, Mute) => Playing,
         (Muted, _) => Muted,
