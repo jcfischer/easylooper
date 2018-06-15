@@ -1,4 +1,5 @@
 use std::fmt;
+use ELState;
 
 // State machine of the looper
 // based on https://www.youtube.com/watch?v=b8slVcXtg3k
@@ -49,14 +50,17 @@ pub enum Commands {
 
 
 
-pub fn looper_cycle(state: LooperState, prev_state:LooperState, command: Commands) -> LooperState {
-    use self::LooperState::*;
-    use self::Commands::*;
+pub fn looper_cycle(plugin_state: &mut ELState, command: Commands) -> LooperState {
+    use LooperState::*;
+    use Commands::*;
+
+    let state = plugin_state.state;
+    let prev_state = plugin_state.prev_state;
 
     match(state, command) {
         (Stopped, Play) => Playing,
         (Stopped, Record) => Clearing,
-        (Stopped, Overdub) => Overdubbing,
+        (Stopped, Overdub) => overdub_start(plugin_state),
         (Stopped, _) => Stopped,
 
         // We need to take care that the buffers are cleared before recording again
@@ -65,7 +69,7 @@ pub fn looper_cycle(state: LooperState, prev_state:LooperState, command: Command
 
         (Playing, Stop) => Stopped,
         (Playing, Record) => Clearing,
-        (Playing, Overdub) => Overdubbing,
+        (Playing, Overdub) => overdub_start(plugin_state),
         (Playing, ReplaceStart) => Replacing,
         (Playing, InsertStart) => Inserting,
         (Playing, Mute) => Muted,
@@ -73,7 +77,7 @@ pub fn looper_cycle(state: LooperState, prev_state:LooperState, command: Command
 
         (Recording, Stop) => Stopped,
         (Recording, Record) => Playing,
-        (Recording, Overdub) => Overdubbing,
+        (Recording, Overdub) => overdub_start(plugin_state),
         (Recording, Play) => Playing,
         (Recording, _) => Recording,
 
@@ -93,4 +97,9 @@ pub fn looper_cycle(state: LooperState, prev_state:LooperState, command: Command
         (Muted, _) => Muted,
         (_, Mute) => Muted,
     }
+}
+
+fn overdub_start(plugin_state: &mut ELState) -> LooperState {
+    plugin_state.loop_index += 1;
+    LooperState::Overdubbing
 }

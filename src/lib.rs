@@ -25,6 +25,7 @@ use vst::api::{self};
 use vst::event::MidiEvent;
 
 mod version;
+
 use version::*;
 
 use easyvst::*;
@@ -42,6 +43,7 @@ use looper_fsm::*;
 use tinyui::*;
 
 easyvst!(ParamId, ELState, ELPlugin);
+
 
 #[repr(usize)]
 #[derive(Debug, Copy, Clone)]
@@ -76,7 +78,6 @@ pub struct ELState {
     // In case we need to return to the previous state after
     // a state change
     events: Vec<MidiEvent>,
-
 }
 
 impl UserState<ParamId> for ELState {
@@ -202,43 +203,45 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             LooperState::Clearing => {
                 state.buffers = ELPlugin::clear_buffers();
                 state.index = 0;
-                state.state = looper_cycle(state.state, state.prev_state, Commands::Record);
+                state.state = looper_cycle(state, Commands::Record);
             }
             _ => {}
         }
-        // select the buffer we are recording into
-        let buffer = &mut state.buffers[state.loop_index];
+
 
         for ((left_in, right_in), (left_out, right_out)) in stereo_in.zip(stereo_out) {
+            // select the buffer we are recording into
+            let recording_buffer = &mut state.buffers[state.loop_index];
+
             let mut left_processed: f32 = 0.0;
             let mut right_processed: f32 = 0.0;
 
             match state.state {
                 LooperState::Recording | LooperState::Inserting => {
                     // Push the new samples into the loop buffers.
-                    buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
+                    recording_buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
                 }
                 LooperState::Overdubbing => {
-                    if let Some((left_old, right_old)) = buffer.buffer.pop_front() {
+                    if let Some((left_old, right_old)) = recording_buffer.buffer.pop_front() {
                         const WET_MULT: f32 = 0.98;
 
                         left_processed = (left_old * WET_MULT) * state.feedback + left_in.as_f32();
                         right_processed = (right_old * WET_MULT) * state.feedback + right_in.as_f32();
 
-                        buffer.buffer.push_back((left_processed, right_processed));
+                        recording_buffer.buffer.push_back((left_processed, right_processed));
                         state.index += buffer_len;
                     }
                 }
                 LooperState::Replacing => {
-                    if let Some((left_old, right_old)) = buffer.buffer.pop_front() {
-                        buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
+                    if let Some((left_old, right_old)) = recording_buffer.buffer.pop_front() {
+                        recording_buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
                         left_processed = left_in.as_f32();
                         right_processed = right_in.as_f32();
                     }
                 }
                 LooperState::Playing => {
-                    if let Some((left_old, right_old)) = buffer.buffer.pop_front() {
-                        buffer.buffer.push_back((left_old, right_old));
+                    if let Some((left_old, right_old)) = recording_buffer.buffer.pop_front() {
+                        recording_buffer.buffer.push_back((left_old, right_old));
                         const WET_MULT: f32 = 0.98;
 
                         left_processed = left_old * WET_MULT;
@@ -257,13 +260,18 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             *right_out = right_processed.as_();
         }
 
-        match state.state {
-            LooperState::Recording | LooperState::Overdubbing | LooperState::Playing => {
-                state.index += buffer_len;
-                state.index = state.index % buffer.length();
+        {
+            // select the buffer we are recording into
+            let buffer = &mut state.buffers[state.loop_index];
+            match state.state {
+                LooperState::Recording | LooperState::Overdubbing | LooperState::Playing => {
+                    state.index += buffer_len;
+                    state.index = state.index % buffer.length();
+                }
+                _ => {}
             }
-            _ => {}
         }
+
 
 
 
@@ -289,39 +297,38 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                             state.prev_state = state.state;
                             match pitch {
                                 A3_PITCH => {
-                                    state.state = looper_cycle(state.state, state.prev_state, Commands::Record);
+                                    state.state = looper_cycle(state, Commands::Record);
                                 }
                                 G3_PITCH => {
-                                    state.state = looper_cycle(state.state, state.prev_state, Commands::Stop);
+                                    state.state = looper_cycle(state, Commands::Stop);
                                 }
                                 F3_PITCH => {
-                                    state.state = looper_cycle(state.state, state.prev_state, Commands::Play);
+                                    state.state = looper_cycle(state, Commands::Play);
                                 }
                                 E3_PITCH => {
-                                    state.state = looper_cycle(state.state, state.prev_state, Commands::Overdub);
+                                    state.state = looper_cycle(state, Commands::Overdub);
                                 }
                                 D3_PITCH => {
-                                    state.state = looper_cycle(state.state, state.prev_state, Commands::ReplaceStart);
+                                    state.state = looper_cycle(state, Commands::ReplaceStart);
                                 }
                                 C3_PITCH => {
-                                    state.state = looper_cycle(state.state, state.prev_state, Commands::Mute);
+                                    state.state = looper_cycle(state, Commands::Mute);
                                 }
                                 B2_PITCH => {
-                                    state.state = looper_cycle(state.state, state.prev_state, Commands::InsertStart);
+                                    state.state = looper_cycle(state, Commands::InsertStart);
                                 }
                                 _ => {}
                             }
-
                         }
                         Status::NoteOff => {
                             let pitch = ev.data[1];
                             info!("Pitch: {}", pitch);
                             match pitch {
                                 D3_PITCH => {
-                                    state.state = looper_cycle(state.state, state.prev_state, Commands::ReplaceStop);
+                                    state.state = looper_cycle(state, Commands::ReplaceStop);
                                 }
                                 B2_PITCH => {
-                                    state.state = looper_cycle(state.state, state.prev_state, Commands::InsertStop);
+                                    state.state = looper_cycle(state, Commands::InsertStop);
                                 }
                                 _ => {}
                             }
@@ -329,7 +336,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                         _ => {}
                     }
                     info!("new state: {}", state.state);
-                    info!("Size Buffer {}: {}", state.loop_index, buffer.buffer.len());
+                   // info!("Size Buffer {}: {}", state.loop_index, buffer.buffer.len());
                     match self.window {
                         Some(window) => {
                             match state.state {
@@ -426,8 +433,8 @@ mod ui;
 use std::os::raw::c_void;
 
 
-const WINDOW_WIDTH: u32 = 640;
-const WINDOW_HEIGHT: u32 = 480;
+const WINDOW_WIDTH: u32 = 480;
+const WINDOW_HEIGHT: u32 = 160;
 
 impl Editor for ELPlugin {
     fn size(&self) -> (i32, i32) { (WINDOW_WIDTH as i32, WINDOW_HEIGHT as i32) }
@@ -448,7 +455,7 @@ impl Editor for ELPlugin {
 
 impl ELPlugin {
     fn clear_buffers() -> Vec<RecordingBuffer> {
-        const NUM_BUFFERS: usize = 2;
+        const NUM_BUFFERS: usize = 4;
         let mut buffers = Vec::new();
         for _i in 0..NUM_BUFFERS {
             let buffer = RecordingBuffer::new();

@@ -23,6 +23,7 @@ tinyui = { git = 'https://github.com/jcfischer/tinyui-rs.git' }
 [lib]
 name = "plexlooper"
 crate-type = ["cdylib"]
+path = "src/lib.rs"
 
 [[bin]]
 name = "standalone"

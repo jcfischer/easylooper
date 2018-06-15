@@ -7,9 +7,11 @@ pub struct RecordingBuffer {
     pub buffer: VecDeque<SamplePair>
 }
 
+const INITIAL_SIZE: usize = 1024;
+
 impl RecordingBuffer {
     pub fn new() -> RecordingBuffer {
-        RecordingBuffer::with_size(1024)
+        RecordingBuffer::with_size(INITIAL_SIZE)
     }
 
     // create a new (empty) buffer with *size* samples
