@@ -33,7 +33,7 @@ impl EventHandler for PluginWindow {
 impl PluginWindow {
     pub fn new(mut window: Window) -> Self {
         let window_rect = Rect::new(0., 0., WIDTH, HEIGHT);
-        let (_top_half_rect, bottom_half_rect) = window_rect.split_horizontal();
+        let (_top_half_rect, _bottom_half_rect) = window_rect.split_horizontal();
         // info!("building window");
         let mut app = Self {
             window: window,
