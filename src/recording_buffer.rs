@@ -4,7 +4,8 @@ use std::collections::VecDeque;
 type SamplePair = (f32, f32);
 
 pub struct RecordingBuffer {
-    pub buffer: VecDeque<SamplePair>
+    pub buffer: VecDeque<SamplePair>,
+    start_position: usize,
 }
 
 const INITIAL_SIZE: usize = 1024;
@@ -20,7 +21,7 @@ impl RecordingBuffer {
         for _ in 0..size {
             buffer.push_back( (0.0, 0.0));
         }
-        RecordingBuffer { buffer: buffer }
+        RecordingBuffer { buffer, start_position: 0 }
     }
 
     // return the length of the recording buffer

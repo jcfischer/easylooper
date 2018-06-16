@@ -99,7 +99,7 @@ pub fn looper_cycle(plugin_state: &mut ELState, command: Commands) -> LooperStat
     }
 }
 
-fn overdub_start(plugin_state: &mut ELState) -> LooperState {
-    plugin_state.loop_index += 1;
+fn overdub_start(_plugin_state: &mut ELState) -> LooperState {
+    // plugin_state.loop_index += 1;
     LooperState::Overdubbing
 }

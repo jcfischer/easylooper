@@ -67,7 +67,8 @@ pub struct ELState {
     buffers: Vec<RecordingBuffer>,
     loop_index: usize,
     loop_len: usize,
-    index: usize,
+    play_position: usize,
+    write_position: usize,
     // the playback position
     seconds: String,
     // display current position in seconds
@@ -163,7 +164,8 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
 
         state.loop_index = 0;  // which loop buffer are we recording to?
         state.state = LooperState::Stopped;
-        state.index = 0;
+        state.play_position = 0;
+        state.write_position = 0;
         state.my_folder = my_folder;
         state.events = Vec::with_capacity(1024);
         info!("Init Done");
@@ -197,55 +199,73 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         // Iterate over outputs as (&mut f32, &mut f32)
         let (mut l, mut r) = outputs.split_at_mut(1);
         let stereo_out = l[0].iter_mut().zip(r[0].iter_mut());
-        let buffer_len = stereo_out.len();
 
         match state.state {
             LooperState::Clearing => {
                 state.buffers = ELPlugin::clear_buffers();
-                state.index = 0;
+                state.play_position = 0;
                 state.state = looper_cycle(state, Commands::Record);
             }
             _ => {}
         }
 
+        let stereo_in_len = stereo_in.len();
+        let stereo_out_len = stereo_out.len();
+        let play_position = state.play_position;
+        let write_position = state.write_position;
 
-        for ((left_in, right_in), (left_out, right_out)) in stereo_in.zip(stereo_out) {
+
+        for (index, (left_in, right_in)) in stereo_in.enumerate() {
+
             // select the buffer we are recording into
-            let recording_buffer = &mut state.buffers[state.loop_index];
+            let record_buffer = &mut state.buffers[state.loop_index];
 
+            match state.state {
+                LooperState::Recording => {
+                    // Push the new samples into the loop buffers.
+                    record_buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
+                }
+                LooperState::Inserting => {
+                    record_buffer.buffer.insert(write_position + index, (left_in.as_f32(), right_in.as_f32()));
+                }
+                LooperState::Overdubbing => {
+                    if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
+                        const WET_MULT: f32 = 0.98;
+
+                        *left_old = (*left_old * WET_MULT) * state.feedback + left_in.as_f32();
+                        *right_old = (*right_old * WET_MULT) * state.feedback + right_in.as_f32();
+                    }
+                }
+                LooperState::Replacing => {
+                    if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
+
+                        *left_old = left_in.as_f32();
+                        *right_old = right_in.as_f32();
+                    }
+                }
+
+                _ => {}
+            }
+        }
+
+        state.write_position += stereo_in_len;
+        let rec_buffer_len = state.buffers[state.loop_index].length();
+        state.write_position = state.write_position % rec_buffer_len;
+        state.loop_len = rec_buffer_len;
+
+        for (index, (left_out, right_out)) in stereo_out.enumerate() {
+            // select the buffer we are playing from
+            let record_buffer = &mut state.buffers[state.loop_index];
             let mut left_processed: f32 = 0.0;
             let mut right_processed: f32 = 0.0;
 
             match state.state {
-                LooperState::Recording | LooperState::Inserting => {
-                    // Push the new samples into the loop buffers.
-                    recording_buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
-                }
-                LooperState::Overdubbing => {
-                    if let Some((left_old, right_old)) = recording_buffer.buffer.pop_front() {
-                        const WET_MULT: f32 = 0.98;
-
-                        left_processed = (left_old * WET_MULT) * state.feedback + left_in.as_f32();
-                        right_processed = (right_old * WET_MULT) * state.feedback + right_in.as_f32();
-
-                        recording_buffer.buffer.push_back((left_processed, right_processed));
-                        state.index += buffer_len;
-                    }
-                }
-                LooperState::Replacing => {
-                    if let Some((left_old, right_old)) = recording_buffer.buffer.pop_front() {
-                        recording_buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
-                        left_processed = left_in.as_f32();
-                        right_processed = right_in.as_f32();
-                    }
-                }
                 LooperState::Playing => {
-                    if let Some((left_old, right_old)) = recording_buffer.buffer.pop_front() {
-                        recording_buffer.buffer.push_back((left_old, right_old));
+                    if let Some((left_old, right_old)) = record_buffer.buffer.get(play_position + index) {
                         const WET_MULT: f32 = 0.98;
 
-                        left_processed = left_old * WET_MULT;
-                        right_processed = right_old * WET_MULT;
+                        left_processed = *left_old * WET_MULT;
+                        right_processed = *right_old * WET_MULT;
                     }
                 }
                 LooperState::Muted => {
@@ -255,24 +275,11 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                 _ => {}
             }
 
-
             *left_out = left_processed.as_();
             *right_out = right_processed.as_();
         }
-
-        {
-            // select the buffer we are recording into
-            let buffer = &mut state.buffers[state.loop_index];
-            match state.state {
-                LooperState::Recording | LooperState::Overdubbing | LooperState::Playing => {
-                    state.index += buffer_len;
-                    state.index = state.index % buffer.length();
-                }
-                _ => {}
-            }
-        }
-
-
+        state.play_position += stereo_out_len;
+        state.play_position = state.play_position % rec_buffer_len;
 
 
         use vst::event::Event;
@@ -336,7 +343,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                         _ => {}
                     }
                     info!("new state: {}", state.state);
-                   // info!("Size Buffer {}: {}", state.loop_index, buffer.buffer.len());
+                    // info!("Size Buffer {}: {}", state.loop_index, buffer.buffer.len());
                     match self.window {
                         Some(window) => {
                             match state.state {
@@ -369,7 +376,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         match self.window {
             Some(window) => {
                 let sample_rate = *state.sample_rate.read().unwrap().deref();
-                let seconds = state.index as f64 / sample_rate;
+                let seconds = state.play_position as f64 / sample_rate;
                 let seconds = format!("{:.*}", 2, seconds);
                 if seconds != state.seconds {
                     window.counter.set_text(&seconds.to_string());
