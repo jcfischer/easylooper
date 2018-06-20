@@ -65,10 +65,14 @@ pub struct ELState {
     feedback: f32,
     send_buffer: SendEventBuffer,
     buffers: Vec<RecordingBuffer>,
-    loop_index: usize,
-    loop_len: usize,
-    play_position: usize,
+    buffer: RecordingBuffer,
+    write_idx: usize,  // index of Vec<rRecordingBuffer>
+    cycle_len: usize,
+    cycles: usize,
+    total_cycles: usize,
+    play_position: usize,  // index into current recording buffer
     write_position: usize,
+    loop_length: usize, // length of current loop in samples
     // the playback position
     seconds: String,
     // display current position in seconds
@@ -161,11 +165,14 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
 
         // generate the buffers
         state.buffers = ELPlugin::clear_buffers();
+        state.buffer = RecordingBuffer::new();
 
-        state.loop_index = 0;  // which loop buffer are we recording to?
+        state.write_idx = 0;  // which loop buffer are we recording to?
         state.state = LooperState::Stopped;
         state.play_position = 0;
         state.write_position = 0;
+
+        state.total_cycles = 1;
         state.my_folder = my_folder;
         state.events = Vec::with_capacity(1024);
         info!("Init Done");
@@ -183,6 +190,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
     }
 
     fn process<T: Float + AsPrim>(&mut self, events: &api::Events, buffer: &mut AudioBuffer<T>) {
+        const WET_MULT: f32 = 0.98;
         let state = &mut self.state.user_state;
 
         let (inputs, mut outputs) = buffer.split();
@@ -200,86 +208,125 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         let (mut l, mut r) = outputs.split_at_mut(1);
         let stereo_out = l[0].iter_mut().zip(r[0].iter_mut());
 
-        match state.state {
-            LooperState::Clearing => {
-                state.buffers = ELPlugin::clear_buffers();
-                state.play_position = 0;
-                state.state = looper_cycle(state, Commands::Record);
-            }
-            _ => {}
-        }
 
         let stereo_in_len = stereo_in.len();
         let stereo_out_len = stereo_out.len();
         let play_position = state.play_position;
         let write_position = state.write_position;
 
+        // info!("write pos/reading pos {}/{}", write_position, play_position);
 
+        // record new material into separate rec_buffer
         for (index, (left_in, right_in)) in stereo_in.enumerate() {
 
             // select the buffer we are recording into
-            let record_buffer = &mut state.buffers[state.loop_index];
+            let mut record_buffer = &mut state.buffer;
+            // let play_buffer = &state.buffers[state.read_idx];
 
             match state.state {
                 LooperState::Recording => {
                     // Push the new samples into the loop buffers.
-                    record_buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
+                    if index == 0 {
+                        info!("record[{}]: {} / {}", state.loop_length, left_in.as_f32(), right_in.as_f32());
+                    }
+                    if (state.write_position + index) < record_buffer.buffer.len() {
+                        if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
+                            *left_old = left_in.as_f32();
+                            *right_old = right_in.as_f32();
+                        }
+
+                    } else {
+                        record_buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
+                    }
+
+                    state.loop_length += 1;
                 }
                 LooperState::Inserting => {
                     record_buffer.buffer.insert(write_position + index, (left_in.as_f32(), right_in.as_f32()));
+                    state.loop_length += 1;
                 }
                 LooperState::Overdubbing => {
                     if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
-                        const WET_MULT: f32 = 0.98;
 
+                        if index == 0 {
+                            info!("overdub[{}]: {} / {}", write_position, left_old, right_old);
+                        }
                         *left_old = (*left_old * WET_MULT) * state.feedback + left_in.as_f32();
                         *right_old = (*right_old * WET_MULT) * state.feedback + right_in.as_f32();
                     }
                 }
                 LooperState::Replacing => {
                     if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
-
+                        if index == 0 {
+                            info!("replace[{}]: {} / {}", write_position, left_in.as_f32(), right_in.as_f32());
+                        }
                         *left_old = left_in.as_f32();
                         *right_old = right_in.as_f32();
                     }
+                }
+                LooperState::Multiplying => {
+                    // copy from the currently playing buffer to the (new) recording buffer
+
+//                    if let Some((left_old, right_old)) = play_buffer.buffer.get(play_position + index) {
+//                        let left_new = (*left_old * WET_MULT) * state.feedback + left_in.as_f32();
+//                        let right_new = (*right_old * WET_MULT) * state.feedback + right_in.as_f32();
+//                        record_buffer.buffer.push_back((left_new.as_f32(), right_new.as_f32()));
+//                    }
                 }
 
                 _ => {}
             }
         }
 
-        state.write_position += stereo_in_len;
-        let rec_buffer_len = state.buffers[state.loop_index].length();
-        state.write_position = state.write_position % rec_buffer_len;
-        state.loop_len = rec_buffer_len;
 
+
+        // play back from the play buffer
         for (index, (left_out, right_out)) in stereo_out.enumerate() {
-            // select the buffer we are playing from
-            let record_buffer = &mut state.buffers[state.loop_index];
+
+            let play_buffer = &state.buffer;
+
             let mut left_processed: f32 = 0.0;
             let mut right_processed: f32 = 0.0;
 
             match state.state {
-                LooperState::Playing => {
-                    if let Some((left_old, right_old)) = record_buffer.buffer.get(play_position + index) {
+                LooperState::Muted | LooperState::Stopped => {
+                    left_processed = 0. as f32;
+                    right_processed = 0. as f32;
+                }
+                _ => {
+                    if let Some((left_old, right_old)) = play_buffer.buffer.get(play_position + index) {
                         const WET_MULT: f32 = 0.98;
+                        if index == 0 {
+                            info!("play[{}]: {}/{}", play_position + index, left_old, right_old );
+                        }
 
                         left_processed = *left_old * WET_MULT;
                         right_processed = *right_old * WET_MULT;
                     }
                 }
-                LooperState::Muted => {
-                    left_processed = 0. as f32;
-                    right_processed = 0. as f32;
-                }
-                _ => {}
             }
 
             *left_out = left_processed.as_();
             *right_out = right_processed.as_();
         }
-        state.play_position += stereo_out_len;
-        state.play_position = state.play_position % rec_buffer_len;
+
+        let rec_buffer_len = state.buffer.length();
+        match state.state {
+            // update the write position
+            LooperState::Recording | LooperState::Inserting | LooperState::Overdubbing | LooperState::Replacing => {
+                state.write_position += stereo_in_len;
+                state.write_position = state.write_position % state.loop_length;
+                state.cycle_len = rec_buffer_len;
+            }
+            _ => {}
+        }
+
+        if state.state != LooperState::Stopped {
+            state.play_position += stereo_out_len;
+            state.play_position = state.play_position % state.loop_length;
+        }
+
+        info!("loop_len / buf_len / write_pos / play_pos {} / {} / {} / {}", state.loop_length, rec_buffer_len, state.write_position, state.play_position);
 
 
         use vst::event::Event;
@@ -292,6 +339,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             const D3_PITCH: u8 = 62;  // Replace
             const C3_PITCH: u8 = 60;  // Mute
             const B2_PITCH: u8 = 59;  // Insert
+            const A2_PITCH: u8 = 57;  // Multiply
             match e {
                 Event::Midi(mut ev) => {
                     let midi_event = status(ev.data[0]);
@@ -324,6 +372,9 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                                 B2_PITCH => {
                                     state.state = looper_cycle(state, Commands::InsertStart);
                                 }
+                                A2_PITCH => {
+                                    state.state = looper_cycle(state, Commands::MultiplyStart);
+                                }
                                 _ => {}
                             }
                         }
@@ -336,6 +387,9 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                                 }
                                 B2_PITCH => {
                                     state.state = looper_cycle(state, Commands::InsertStop);
+                                }
+                                A2_PITCH => {
+                                    state.state = looper_cycle(state, Commands::MultiplyStop);
                                 }
                                 _ => {}
                             }
@@ -382,6 +436,9 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                     window.counter.set_text(&seconds.to_string());
                     state.seconds = seconds;
                 }
+
+                let cycles = format!("{} | {}", state.cycles, state.total_cycles);
+                window.cycle_label.set_text(&cycles.to_string());
             }
             _ => {}
         };

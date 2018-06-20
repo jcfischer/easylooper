@@ -30,6 +30,12 @@ impl RecordingBuffer {
     }
 }
 
+impl Default for RecordingBuffer {
+    fn default() -> RecordingBuffer {
+        RecordingBuffer::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
