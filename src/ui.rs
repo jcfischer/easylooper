@@ -11,6 +11,7 @@ pub struct PluginWindow {
     pub counter: Label,
     pub state_label: Label,
     pub cycle_label: Label,
+    pub division_label: Label,
     pub version_label: Label,
 }
 
@@ -40,6 +41,7 @@ impl PluginWindow {
             window: window,
             counter: Label::new("0:00", Rect::new(10., 10., 160., 40. )),
             cycle_label: Label::new("1 | 1", Rect::new(160., 10., 80., 40. )),
+            division_label: Label::new("8", Rect::new(240., 50., 120., 40. )),
             state_label: Label::new("Stopped", Rect::new(10., 50., 120., 40. )),
             version_label: Label::new("PlexLooper v0000", Rect::new(380., 10., 120., 16.)),
 //            button: ButtonBuilder {
@@ -58,11 +60,13 @@ impl PluginWindow {
         let version_font = Font::system_font(0.);
         app.counter.set_font(font);
         app.cycle_label.set_font(font);
+        app.division_label.set_font(font);
         app.state_label.set_font(font);
         app.version_label.set_font(version_font);
 
         app.counter.attach(&mut app.window);
         app.cycle_label.attach(&mut app.window);
+        app.division_label.attach(&mut app.window);
         app.state_label.attach(&mut app.window);
         app.version_label.attach(&mut app.window);
         app.version_label.set_text("Version v0.0.1.1");

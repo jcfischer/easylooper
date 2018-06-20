@@ -49,6 +49,7 @@ easyvst!(ParamId, ELState, ELPlugin);
 #[derive(Debug, Copy, Clone)]
 pub enum ParamId {
     Feedback,
+    Division,
 }
 
 
@@ -62,12 +63,20 @@ struct Command {
 #[derive(Default)]
 pub struct ELState {
     my_folder: PathBuf,
+    // Parameters
     feedback: f32,
+    division: usize,
+
+    // buffers
+
     send_buffer: SendEventBuffer,
     buffers: Vec<RecordingBuffer>,
     buffer: RecordingBuffer,
     write_idx: usize,  // index of Vec<rRecordingBuffer>
     cycle_len: usize,
+    division_len: usize,
+    subdivision: usize,
+    in_sync: bool,
     cycles: usize,
     total_cycles: usize,
     play_position: usize,  // index into current recording buffer
@@ -91,6 +100,7 @@ impl UserState<ParamId> for ELState {
         use ParamId::*;
         match param_id {
             Feedback => self.feedback = val,
+            Division => self.division = val as usize,
         }
     }
 
@@ -99,6 +109,7 @@ impl UserState<ParamId> for ELState {
         use ParamId::*;
         match param_id {
             Feedback => format!("{:.2} ", val),
+            Division => format!("{}", val),
         }
     }
 }
@@ -117,6 +128,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
     fn params() -> Vec<ParamDef> {
         vec![
             ParamDef::new("Feedback", 0.0, 1.0, 1.0),
+            ParamDef::new("Division", 1.0, 16.0, 8.0),
         ]
     }
 
@@ -133,7 +145,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             version: Version::get_version(),
             inputs: 2,
             outputs: 2,
-            parameters: 1,
+            parameters: 2,
 
             ..Info::default()
         }
@@ -171,6 +183,9 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         state.state = LooperState::Stopped;
         state.play_position = 0;
         state.write_position = 0;
+
+        state.division_len = 0;
+        state.subdivision = 0;
 
         state.total_cycles = 1;
         state.my_folder = my_folder;
@@ -217,17 +232,21 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         // info!("write pos/reading pos {}/{}", write_position, play_position);
 
         // record new material into separate rec_buffer
+        let sync_point = (state.subdivision + 1) * state.division_len;
+
         for (index, (left_in, right_in)) in stereo_in.enumerate() {
 
             // select the buffer we are recording into
             let mut record_buffer = &mut state.buffer;
             // let play_buffer = &state.buffers[state.read_idx];
 
+            let in_sync = write_position + index == sync_point;
+
             match state.state {
                 LooperState::Recording => {
                     // Push the new samples into the loop buffers.
                     if index == 0 {
-                        info!("record[{}]: {} / {}", state.loop_length, left_in.as_f32(), right_in.as_f32());
+                        // info!("record[{}]: {} / {}", state.loop_length, left_in.as_f32(), right_in.as_f32());
                     }
                     if (state.write_position + index) < record_buffer.buffer.len() {
                         if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
@@ -249,7 +268,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                     if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
 
                         if index == 0 {
-                            info!("overdub[{}]: {} / {}", write_position, left_old, right_old);
+                            // info!("overdub[{}]: {} / {}", write_position, left_old, right_old);
                         }
                         *left_old = (*left_old * WET_MULT) * state.feedback + left_in.as_f32();
                         *right_old = (*right_old * WET_MULT) * state.feedback + right_in.as_f32();
@@ -258,7 +277,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                 LooperState::Replacing => {
                     if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
                         if index == 0 {
-                            info!("replace[{}]: {} / {}", write_position, left_in.as_f32(), right_in.as_f32());
+                            // info!("replace[{}]: {} / {}", write_position, left_in.as_f32(), right_in.as_f32());
                         }
                         *left_old = left_in.as_f32();
                         *right_old = right_in.as_f32();
@@ -297,7 +316,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                     if let Some((left_old, right_old)) = play_buffer.buffer.get(play_position + index) {
                         const WET_MULT: f32 = 0.98;
                         if index == 0 {
-                            info!("play[{}]: {}/{}", play_position + index, left_old, right_old );
+                            // info!("play[{}]: {}/{}", play_position + index, left_old, right_old );
                         }
 
                         left_processed = *left_old * WET_MULT;
@@ -317,6 +336,8 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                 state.write_position += stereo_in_len;
                 state.write_position = state.write_position % state.loop_length;
                 state.cycle_len = rec_buffer_len;
+                state.division_len = (state.cycle_len / state.division) as usize;
+                state.subdivision = (state.write_position / state.division_len) as usize;
             }
             _ => {}
         }
@@ -326,7 +347,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             state.play_position = state.play_position % state.loop_length;
         }
 
-        info!("loop_len / buf_len / write_pos / play_pos {} / {} / {} / {}", state.loop_length, rec_buffer_len, state.write_position, state.play_position);
+        // info!("loop_len / buf_len / write_pos / play_pos {} / {} / {} / {}", state.loop_length, rec_buffer_len, state.write_position, state.play_position);
 
 
         use vst::event::Event;
@@ -438,7 +459,9 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                 }
 
                 let cycles = format!("{} | {}", state.cycles, state.total_cycles);
+                let division = format!("{}", state.division);
                 window.cycle_label.set_text(&cycles.to_string());
+                window.division_label.set_text(&division.to_string());
             }
             _ => {}
         };
