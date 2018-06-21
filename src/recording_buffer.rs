@@ -8,7 +8,7 @@ pub struct RecordingBuffer {
     start_position: usize,
 }
 
-const INITIAL_SIZE: usize = 1024;
+const INITIAL_SIZE: usize = 102400;
 
 impl RecordingBuffer {
     pub fn new() -> RecordingBuffer {

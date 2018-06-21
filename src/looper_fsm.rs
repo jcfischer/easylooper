@@ -66,7 +66,7 @@ pub fn looper_cycle(plugin_state: &mut ELState, command: Commands) -> LooperStat
 
     match(state, command) {
         (Stopped, Play) => Playing,
-        (Stopped, Record) => start_clearing(plugin_state),
+        (Stopped, Record) => clearing_start(plugin_state),
         (Stopped, Overdub) => overdub_start(plugin_state),
         (Stopped, _) => Stopped,
 
@@ -75,9 +75,9 @@ pub fn looper_cycle(plugin_state: &mut ELState, command: Commands) -> LooperStat
         (Clearing, _) => Recording,
 
         (Playing, Stop) => Stopped,
-        (Playing, Record) => start_clearing(plugin_state),
+        (Playing, Record) => clearing_start(plugin_state),
         (Playing, Overdub) => overdub_start(plugin_state),
-        (Playing, ReplaceStart) => Replacing,
+        (Playing, ReplaceStart) => replace_start(plugin_state),
         (Playing, InsertStart) => Inserting,
         (Playing, MultiplyStart) => multiply_start(plugin_state),
         (Playing, Mute) => Muted,
@@ -92,7 +92,7 @@ pub fn looper_cycle(plugin_state: &mut ELState, command: Commands) -> LooperStat
 
         (Overdubbing, Play) => Playing,
         (Overdubbing, Stop) => Stopped,
-        (Overdubbing, Record) => start_clearing(plugin_state),
+        (Overdubbing, Record) => clearing_start(plugin_state),
         (Overdubbing, Overdub) => Playing,
         (Overdubbing, MultiplyStart) => multiply_start(plugin_state),
         (Overdubbing, _) => Overdubbing,
@@ -100,7 +100,8 @@ pub fn looper_cycle(plugin_state: &mut ELState, command: Commands) -> LooperStat
         (Multiplying, MultiplyStop) => multiply_end(plugin_state),
         (Multiplying, _) => Multiplying,
 
-        (Replacing, ReplaceStop) => prev_state,
+        (Replacing, ReplaceStop) => replace_stop(plugin_state, prev_state),
+        (Replacing, Stop) => replace_stop(plugin_state, Stopped),
         (Replacing, _) => Replacing,
 
         (Inserting, InsertStop) => prev_state,
@@ -112,14 +113,16 @@ pub fn looper_cycle(plugin_state: &mut ELState, command: Commands) -> LooperStat
     }
 }
 
-fn start_clearing(plugin_state: &mut ELState) -> LooperState {
+fn clearing_start(plugin_state: &mut ELState) -> LooperState {
     info!("clearing");
     plugin_state.buffers = ELPlugin::clear_buffers();
+    plugin_state.write_position = 0;
     plugin_state.play_position = 0;
     plugin_state.loop_length = 0;
     plugin_state.cycle_len = 0;
+    plugin_state.in_sync = false;
+    plugin_state.sync_waiting = false;
     LooperState::Recording
-
 }
 fn recording_stop(plugin_state: &mut ELState, next_state: LooperState) -> LooperState {
     plugin_state.cycle_len = plugin_state.loop_length;
@@ -127,11 +130,28 @@ fn recording_stop(plugin_state: &mut ELState, next_state: LooperState) -> Looper
     next_state
 }
 
-fn overdub_start(_plugin_state: &mut ELState) -> LooperState {
+fn overdub_start(plugin_state: &mut ELState) -> LooperState {
     // plugin_state.loop_index += 1;
+    plugin_state.write_position = plugin_state.play_position;
     LooperState::Overdubbing
 }
 
+fn replace_start(plugin_state: &mut ELState) -> LooperState {
+    info!("replace start");
+    plugin_state.write_position = plugin_state.play_position;
+
+    plugin_state.sync_waiting = true;
+    plugin_state.in_sync = false;
+    LooperState::Replacing
+}
+
+fn replace_stop(plugin_state: &mut ELState, next_state: LooperState) -> LooperState {
+    info!("replace stop");
+    plugin_state.sync_waiting = true;
+    plugin_state.in_sync = true;
+    plugin_state.next_state = Some(next_state);
+    LooperState::Replacing
+}
 fn multiply_start(plugin_state: &mut ELState) -> LooperState {
     let new_buffer = RecordingBuffer::with_size(plugin_state.cycle_len);
     plugin_state.buffers.push(new_buffer);

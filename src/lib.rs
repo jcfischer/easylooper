@@ -65,23 +65,29 @@ pub struct ELState {
     my_folder: PathBuf,
     // Parameters
     feedback: f32,
-    division: usize,
+    division: usize, // how many 8ths are we dividing into (1 - 16)
 
     // buffers
 
     send_buffer: SendEventBuffer,
     buffers: Vec<RecordingBuffer>,
     buffer: RecordingBuffer,
-    write_idx: usize,  // index of Vec<rRecordingBuffer>
+    write_idx: usize,
+    // index of Vec<rRecordingBuffer>
     cycle_len: usize,
     division_len: usize,
     subdivision: usize,
     in_sync: bool,
+    sync_waiting: bool,
+    sync_point: usize,
+
     cycles: usize,
     total_cycles: usize,
-    play_position: usize,  // index into current recording buffer
+    play_position: usize,
+    // index into current recording buffer
     write_position: usize,
-    loop_length: usize, // length of current loop in samples
+    loop_length: usize,
+    // length of current loop in samples
     // the playback position
     seconds: String,
     // display current position in seconds
@@ -89,6 +95,7 @@ pub struct ELState {
 
     state: LooperState,
     prev_state: LooperState,
+    next_state: Option<LooperState>,
     // In case we need to return to the previous state after
     // a state change
     events: Vec<MidiEvent>,
@@ -187,6 +194,10 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         state.division_len = 0;
         state.subdivision = 0;
 
+        state.sync_waiting = false;
+        state.in_sync = false;
+
+
         state.total_cycles = 1;
         state.my_folder = my_folder;
         state.events = Vec::with_capacity(1024);
@@ -232,7 +243,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         // info!("write pos/reading pos {}/{}", write_position, play_position);
 
         // record new material into separate rec_buffer
-        let sync_point = (state.subdivision + 1) * state.division_len;
+        state.sync_point = (state.subdivision + 0) * state.division_len;
 
         for (index, (left_in, right_in)) in stereo_in.enumerate() {
 
@@ -240,7 +251,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             let mut record_buffer = &mut state.buffer;
             // let play_buffer = &state.buffers[state.read_idx];
 
-            let in_sync = write_position + index == sync_point;
+            let in_sync = write_position + index == state.sync_point;
 
             match state.state {
                 LooperState::Recording => {
@@ -253,7 +264,6 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                             *left_old = left_in.as_f32();
                             *right_old = right_in.as_f32();
                         }
-
                     } else {
                         record_buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
                     }
@@ -266,7 +276,6 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                 }
                 LooperState::Overdubbing => {
                     if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
-
                         if index == 0 {
                             // info!("overdub[{}]: {} / {}", write_position, left_old, right_old);
                         }
@@ -275,12 +284,42 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                     }
                 }
                 LooperState::Replacing => {
-                    if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
-                        if index == 0 {
-                            // info!("replace[{}]: {} / {}", write_position, left_in.as_f32(), right_in.as_f32());
+                    // check to see if we need to sync up before starting to replace
+                    match (state.sync_waiting, state.in_sync, in_sync) {
+                        // we are waiting for a sync, not yet replacing and sync point has arrived
+                        (true, false, true) => {  // start replacing
+                            info!("sync point reached: {} - replacing", state.sync_point);
+                            state.in_sync = true;
+                            state.sync_waiting = false;
                         }
-                        *left_old = left_in.as_f32();
-                        *right_old = right_in.as_f32();
+                        // we are waiting for a sync, not yet replacing and not on sync point
+                        (true, false, false) => {} // keep waiting
+                        // waiting for a sync, already replacing and sync point has arrived
+                        (true, true, true) => { // stop replacing
+                            let next_state = state.next_state.unwrap();
+                            info!("sync point reached: {} - stopping replace -> {}", state.sync_point, next_state);
+                            state.in_sync = false;
+                            state.sync_waiting = false;
+
+                            state.state = next_state;
+                            state.next_state = None;
+                        }
+                        // we are waiting for a sync, already replacing and not on sync point
+                        (true, true, false) => {
+                            // info!("idx: {} / {}, sync_point: {}", write_position + index, play_position + index, state.sync_point);
+                        } // keep replacing
+                        // not waiting for a sync point
+                        (false, _, _) => {} // do nothing
+                    }
+
+                    if state.in_sync {
+                        if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
+                            if index == 0 {
+                                // info!("replace[{}]: {} / {}", write_position, left_in.as_f32(), right_in.as_f32());
+                            }
+                            *left_old = left_in.as_f32();
+                            *right_old = right_in.as_f32();
+                        }
                     }
                 }
                 LooperState::Multiplying => {
@@ -298,10 +337,8 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         }
 
 
-
         // play back from the play buffer
         for (index, (left_out, right_out)) in stereo_out.enumerate() {
-
             let play_buffer = &state.buffer;
 
             let mut left_processed: f32 = 0.0;
@@ -329,22 +366,24 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             *right_out = right_processed.as_();
         }
 
-        let rec_buffer_len = state.buffer.length();
         match state.state {
             // update the write position
             LooperState::Recording | LooperState::Inserting | LooperState::Overdubbing | LooperState::Replacing => {
                 state.write_position += stereo_in_len;
                 state.write_position = state.write_position % state.loop_length;
-                state.cycle_len = rec_buffer_len;
-                state.division_len = (state.cycle_len / state.division) as usize;
-                state.subdivision = (state.write_position / state.division_len) as usize;
             }
             _ => {}
         }
 
         if state.state != LooperState::Stopped {
             state.play_position += stereo_out_len;
-            state.play_position = state.play_position % state.loop_length;
+            state.play_position = if state.loop_length > 0 {
+                state.play_position % state.loop_length
+            } else { 0 };
+            state.division_len = (state.cycle_len / state.division) as usize;
+            state.subdivision = if state.division_len > 0 {
+                (state.play_position / state.division_len) as usize
+            } else { 0 }
         }
 
         // info!("loop_len / buf_len / write_pos / play_pos {} / {} / {} / {}", state.loop_length, rec_buffer_len, state.write_position, state.play_position);
@@ -460,8 +499,10 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
 
                 let cycles = format!("{} | {}", state.cycles, state.total_cycles);
                 let division = format!("{}", state.division);
+                let subdiv = format!("{} - {} - {}:{}", state.subdivision, state.sync_point, state.in_sync, state.sync_waiting);
                 window.cycle_label.set_text(&cycles.to_string());
                 window.division_label.set_text(&division.to_string());
+                window.subdiv_label.set_text(&subdiv.to_string());
             }
             _ => {}
         };
