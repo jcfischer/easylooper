@@ -44,7 +44,7 @@ impl PluginWindow {
             cycle_label: Label::new("1 | 1", Rect::new(160., 10., 80., 40. )),
             division_label: Label::new("8", Rect::new(240., 50., 120., 40. )),
             subdiv_label: Label::new("x", Rect::new(10., 100., 480., 40.)),
-            state_label: Label::new("Stopped", Rect::new(10., 50., 120., 40. )),
+            state_label: Label::new("Stopped", Rect::new(10., 50., 180., 40. )),
             version_label: Label::new("PlexLooper v0000", Rect::new(380., 10., 120., 16.)),
 //            button: ButtonBuilder {
 //                id: "a button",
