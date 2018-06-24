@@ -11,6 +11,8 @@ extern crate simplelog;
 extern crate num_traits;
 extern crate asprim;
 
+extern crate app_dirs;
+
 use simplelog::*;
 
 use num_traits::Float;
@@ -18,6 +20,8 @@ use asprim::AsPrim;
 
 use std::sync::RwLock;
 use std::ops::{Deref, DerefMut};
+
+use app_dirs::*;
 
 use vst::plugin::{Info, Category, HostCallback, CanDo};
 use vst::buffer::{AudioBuffer, SendEventBuffer};
@@ -44,6 +48,10 @@ use looper_fsm::*;
 
 use tinyui::*;
 
+
+const APP_INFO: AppInfo = AppInfo { name: "PlexLooper", author: "Jens-Christian Fischer" };
+
+
 easyvst!(ParamId, ELState, ELPlugin);
 
 
@@ -60,6 +68,8 @@ struct Command {
     // the midi note this command is bound to
     command: Commands,
 }
+
+
 
 
 #[derive(Default)]
@@ -167,17 +177,24 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
     }
 
     fn init(&mut self) {
-        #[cfg(windows)] let my_folder = fs::get_folder_path().unwrap();
-        // #[cfg(not(windows))] let my_folder = ::std::env::home_dir().unwrap();
-        #[cfg(not(windows))] let my_folder = ::std::path::PathBuf::from("/Users/fischer/Desktop");
-        ;
-        let log_file = File::create(my_folder.join("plexlooper.log")).unwrap();
-        use std::fs::File;
 
-        let _ = CombinedLogger::init(vec![WriteLogger::new(LevelFilter::Info,
-                                                           Config::default(), log_file)]);
+        let root = app_root(AppDataType::UserConfig, &APP_INFO);
+        match root {
+            Ok(folder) => {
+                let log_file = File::create(folder.join("plexlooper.log")).unwrap();
+                use std::fs::File;
+
+                let _ = CombinedLogger::init(vec![WriteLogger::new(LevelFilter::Info,
+                                                                   Config::default(), log_file)]);
+                info!("my folder {:?}", folder);
+            }
+            Err(e) => {}
+        }
+
+
         info!("init in host {:?}", self.state.host.get_info());
-        info!("my folder {:?}", my_folder);
+
+
 
         log_panics::init();
 
@@ -199,7 +216,6 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         state.sync_window = 1;
 
         state.total_cycles = 1;
-        state.my_folder = my_folder;
         state.events = Vec::with_capacity(1024);
         info!("Init Done");
     }
@@ -247,6 +263,19 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         // record new material into separate rec_buffer
         state.sync_point = (state.subdivision + 0) * state.division_len;
 
+        // if we are inserting, we need to shift all exisisting samples to the right
+        // in order to save time, we will insert a new vec with the size of the DAW buffer
+
+        if state.state == LooperState::Inserting {
+            let size = stereo_in.len();
+            let mut ins_buf: Vec<SamplePair> = Vec::with_capacity(size);
+            for _ in 0..size {
+                ins_buf.push((0.0,0.0));
+            }
+            let mut record_buffer = &mut state.buffer;
+            record_buffer.buffer.splice(write_position..write_position, ins_buf.iter().cloned());
+        }
+
         for (index, (left_in, right_in)) in stereo_in.enumerate() {
 
             // select the buffer we are recording into
@@ -266,16 +295,20 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                             *right_old = right_in.as_f32();
                         }
                     } else {
-                        record_buffer.buffer.push_back((left_in.as_f32(), right_in.as_f32()));
+                        record_buffer.buffer.push((left_in.as_f32(), right_in.as_f32()));
                     }
 
                     state.loop_length += 1;
                     state.cycle_len += 1;
                 }
                 LooperState::Inserting => {
-                    record_buffer.buffer.insert(write_position + index, (left_in.as_f32(), right_in.as_f32()));
-                    state.loop_length += 1;
-                    state.cycle_len += 1;
+                    if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
+                        *left_old = left_in.as_f32();
+                        *right_old = right_in.as_f32();
+                        state.loop_length += 1;
+                        state.cycle_len += 1;
+                    }
+
                 }
                 LooperState::Overdubbing => {
                     if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
@@ -304,15 +337,14 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                             Commands::InsertStart => LooperState::Inserting,
                             _ => state.state
                         }
-
                     };
                 }
 
                 LooperState::SyncStop => {
                     let pos = write_position + index;
                     if (pos >= state.sync_point) & (pos < state.sync_point + state.sync_window) {
-
-                        info!("sync point reached: {} - stopping {} -> {}", state.sync_point, state.state, state.return_state);;
+                        info!("sync point reached: {} - stopping {} -> {}", state.sync_point, state.state, state.return_state);
+                        ;
                         state.state = state.return_state;
                     };
                 }
@@ -516,8 +548,6 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
     }
 
     // functions that aren't VST specific
-
-
 }
 
 

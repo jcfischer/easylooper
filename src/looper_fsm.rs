@@ -56,8 +56,6 @@ pub enum Commands {
     MultiplyStart,  // unrounded multiply
     MultiplyStop,
     ReplaceStart,
-    SyncReplaceStart,
-    SyncReplaceStop,
     ReplaceStop,
     InsertStart,
     InsertStop,
@@ -75,8 +73,6 @@ impl fmt::Display for Commands {
             Commands::MultiplyStart => "MultiplyStart",
             Commands::MultiplyStop => "MultiplyStop",
             Commands::ReplaceStart => "ReplaceStart",
-            Commands::SyncReplaceStart => "SyncReplaceStart",
-            Commands::SyncReplaceStop => "SyncReplaceStop",
             Commands::ReplaceStop => "ReplaceStop",
             Commands::InsertStart => "InserstStart",
             Commands::InsertStop => "InsertStop",
@@ -134,9 +130,9 @@ pub fn  looper_cycle(plugin_state: &mut ELState, command: Commands) -> LooperSta
         (Replacing, Stop) => Stopped,
         (Replacing, _) => Replacing,
 
-        (SyncStart(command), ReplaceStop) => sync_stop(plugin_state),
-        (SyncStart(command), InsertStop) => sync_stop(plugin_state),
-        (SyncStart(command), _) => SyncStart(command),
+        (SyncStart(_command), ReplaceStop) => sync_stop(plugin_state),
+        (SyncStart(_command), InsertStop) => sync_stop(plugin_state),
+        (SyncStart(_command), _) => SyncStart(command),
         (SyncStop, _) => SyncStop,
 
         (Inserting, InsertStop) => sync_stop(plugin_state),

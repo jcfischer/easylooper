@@ -1,10 +1,10 @@
 use std::collections::VecDeque;
 
 // handling of audio
-type SamplePair = (f32, f32);
+pub type SamplePair = (f32, f32);
 
 pub struct RecordingBuffer {
-    pub buffer: VecDeque<SamplePair>,
+    pub buffer: Vec<SamplePair>,
     start_position: usize,
 }
 
@@ -17,9 +17,9 @@ impl RecordingBuffer {
 
     // create a new (empty) buffer with *size* samples
     pub fn with_size(size: usize) -> RecordingBuffer {
-        let mut buffer = VecDeque::with_capacity(size);
+        let mut buffer = Vec::with_capacity(size);
         for _ in 0..size {
-            buffer.push_back( (0.0, 0.0));
+            buffer.push( (0.0, 0.0));
         }
         RecordingBuffer { buffer, start_position: 0 }
     }
@@ -27,6 +27,10 @@ impl RecordingBuffer {
     // return the length of the recording buffer
     pub fn length(&self) -> usize {
         self.buffer.len()
+    }
+
+    pub fn insert_empty(&self, size: usize) -> bool {
+        true
     }
 }
 

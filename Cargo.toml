@@ -14,7 +14,7 @@ simplelog = "*"
 num-traits = "*"
 asprim = "*"
 tinyui = { git = 'https://github.com/jcfischer/tinyui-rs.git' }
-
+app_dirs = "^1.2.1"
 
 
 [dev-dependencies]
