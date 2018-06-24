@@ -79,6 +79,10 @@ impl RecordingBuffer {
 
         }
     }
+
+    pub fn insert<I>(&mut self, idx: usize, insert: I) {
+        // self.buffer.splice(idx..idx, insert.iter().cloned());
+    }
 }
 
 impl Default for RecordingBuffer {

@@ -70,8 +70,6 @@ struct Command {
 }
 
 
-
-
 #[derive(Default)]
 pub struct ELState {
     my_folder: PathBuf,
@@ -91,7 +89,11 @@ pub struct ELState {
     subdivision: usize,
 
     sync_point: usize,
-    sync_window: usize,  // how many samples after a sync point is it still considered valid
+    sync_window: usize,
+    // how many samples after a sync point is it still considered valid
+    /// when inserting, we want to keep the sync_len constant as of the sync start
+    /// otherwise, it would expand as new material is inserted
+    insert_sync_len: usize,
 
     cycles: usize,
     total_cycles: usize,
@@ -177,7 +179,6 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
     }
 
     fn init(&mut self) {
-
         let root = app_root(AppDataType::UserConfig, &APP_INFO);
         match root {
             Ok(folder) => {
@@ -193,7 +194,6 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
 
 
         info!("init in host {:?}", self.state.host.get_info());
-
 
 
         log_panics::init();
@@ -225,7 +225,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
     }
 
     fn set_sample_rate(&mut self, fs: f32) {
-        const SYNC_DELAY: f64 = 20.; // how many ms are we allowing a sync to happen
+        const SYNC_DELAY: f64 = 40.; // how many ms are we allowing a sync to happen
         info!("set_sample_rate: {}", fs);
         let fs = fs as f64;
         let state = &mut self.state.user_state;
@@ -234,7 +234,6 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
     }
 
     fn process<T: Float + AsPrim>(&mut self, events: &api::Events, buffer: &mut AudioBuffer<T>) {
-        const WET_MULT: f32 = 0.98;
         let state = &mut self.state.user_state;
 
         let (inputs, mut outputs) = buffer.split();
@@ -260,8 +259,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
 
         // info!("write pos/reading pos {}/{}", write_position, play_position);
 
-        // record new material into separate rec_buffer
-        state.sync_point = (state.subdivision + 0) * state.division_len;
+        state.sync_point = state.subdivision * state.division_len;
 
         // if we are inserting, we need to shift all exisisting samples to the right
         // in order to save time, we will insert a new vec with the size of the DAW buffer
@@ -270,7 +268,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             LooperState::Inserting | LooperState::SyncStop(Commands::InsertStop) => {
                 let record_buffer = &mut state.buffer;
                 record_buffer.insert_empty(write_position, stereo_in.len());
-                info!("extended buffer at {} : {}, new len {}", write_position, stereo_in.len(), record_buffer.length());
+                // info!("extended buffer at {} : {}, new len {}", write_position, stereo_in.len(), record_buffer.length());
             }
             _ => {}
         }
@@ -285,11 +283,24 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             match state.state {
                 LooperState::SyncStop(command) => {
                     let pos = write_position + index;
-                    if (pos >= state.sync_point) & (pos < state.sync_point + state.sync_window) {
-                        info!("sync point reached: {}/{} - stopping {} {} -> {}", state.sync_point, pos, state.state, command, state.return_state);
+                    match command {
+                        Commands::ReplaceStop => {
+                            if (pos >= state.sync_point) & (pos < state.sync_point + state.sync_window) {
+                                info!("sync point reached: {}/{} - stopping {} {} -> {}", state.sync_point, pos, state.state, command, state.return_state);
 
-                        state.state = state.return_state;
-                    };
+                                state.state = state.return_state;
+                            }
+                        }
+                        Commands::InsertStop => {
+                            if (pos % state.insert_sync_len) < state.sync_window {
+                                info!("insert sync point reached: {}/{} - stopping {} {} -> {}", state.insert_sync_len, pos, state.state, command, state.return_state);
+
+                                state.state = state.return_state;
+                            }
+                        }
+                        _ => {}
+                    }
+
                 }
                 _ => {}
             }
@@ -317,15 +328,12 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                         state.loop_length += 1;
                         state.cycle_len += 1;
                     }
-
                 }
                 LooperState::Overdubbing => {
                     record_buffer.overdub(write_position + index, (left_in.as_f32(), right_in.as_f32()), state.feedback);
-
                 }
                 LooperState::Replacing | LooperState::SyncStop(Commands::ReplaceStop) => {
                     record_buffer.overwrite(write_position + index, (left_in.as_f32(), right_in.as_f32()));
-
                 }
                 LooperState::SyncStart(command) => {
                     let pos = write_position + index;
@@ -334,8 +342,9 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                         state.state = match command {
                             Commands::ReplaceStart => LooperState::Replacing,
                             Commands::InsertStart => {
+                                state.insert_sync_len = state.division_len; // store the current length of a subdivision
                                 record_buffer.insert_empty(write_position + index, stereo_in_len - index);
-                                info!("switching, extended buffer at {} : {}, new len {}", write_position + index, stereo_in_len - index, record_buffer.length());
+                                // info!("switching, extended buffer at {} : {}, new len {}", write_position + index, stereo_in_len - index, record_buffer.length());
                                 LooperState::Inserting
                             }
                             _ => state.state
