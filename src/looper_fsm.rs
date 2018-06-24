@@ -15,7 +15,7 @@ pub enum LooperState {
     Playing,
     Replacing,
     SyncStart(Commands),
-    SyncStop,
+    SyncStop(Commands),
     Inserting,
     Muted,
 }
@@ -38,7 +38,7 @@ impl fmt::Display for LooperState {
             LooperState::Clearing => "Clearing",
             LooperState::Replacing => "Replacing",
             LooperState::SyncStart(_command) => "Sync Start",
-            LooperState::SyncStop => "Sync Stop",
+            LooperState::SyncStop(_command) => "Sync Stop",
             LooperState::Inserting => "Inserting",
             LooperState::Muted => "Muted",
         };
@@ -88,7 +88,6 @@ pub fn  looper_cycle(plugin_state: &mut ELState, command: Commands) -> LooperSta
     use Commands::*;
 
     let state = plugin_state.state;
-    let prev_state = plugin_state.prev_state;
 
     match(state, command) {
         (Stopped, Play) => Playing,
@@ -126,16 +125,16 @@ pub fn  looper_cycle(plugin_state: &mut ELState, command: Commands) -> LooperSta
         (Multiplying, MultiplyStop) => multiply_end(plugin_state),
         (Multiplying, _) => Multiplying,
 
-        (Replacing, ReplaceStop) => sync_stop(plugin_state),
+        (Replacing, ReplaceStop) => replace_stop(plugin_state),
         (Replacing, Stop) => Stopped,
         (Replacing, _) => Replacing,
 
-        (SyncStart(_command), ReplaceStop) => sync_stop(plugin_state),
-        (SyncStart(_command), InsertStop) => sync_stop(plugin_state),
+        (SyncStart(_command), ReplaceStop) => replace_stop(plugin_state),
+        (SyncStart(_command), InsertStop) => insert_stop(plugin_state),
         (SyncStart(_command), _) => SyncStart(command),
-        (SyncStop, _) => SyncStop,
+        (SyncStop(command), _) => SyncStop(command),
 
-        (Inserting, InsertStop) => sync_stop(plugin_state),
+        (Inserting, InsertStop) => insert_stop(plugin_state),
         (Inserting, _) => Inserting,
 
         (Muted, Mute) => Playing,
@@ -173,10 +172,10 @@ fn replace_start(plugin_state: &mut ELState) -> LooperState {
     LooperState::SyncStart(Commands::ReplaceStart)
 }
 
-fn sync_stop(plugin_state: &mut ELState) -> LooperState {
-    info!("sync stop");
+fn replace_stop(_plugin_state: &mut ELState) -> LooperState {
+    info!("replace stop");
 
-    LooperState::SyncStop
+    LooperState::SyncStop(Commands::ReplaceStop)
 }
 
 
@@ -188,6 +187,11 @@ fn insert_start(plugin_state: &mut ELState) -> LooperState {
     LooperState::SyncStart(Commands::InsertStart)
 }
 
+fn insert_stop(_plugin_state: &mut ELState) -> LooperState {
+    info!("insert stop");
+
+    LooperState::SyncStop(Commands::InsertStop)
+}
 
 fn multiply_start(plugin_state: &mut ELState) -> LooperState {
     let new_buffer = RecordingBuffer::with_size(plugin_state.cycle_len);

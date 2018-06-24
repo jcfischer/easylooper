@@ -188,7 +188,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                                                                    Config::default(), log_file)]);
                 info!("my folder {:?}", folder);
             }
-            Err(e) => {}
+            Err(_e) => {}
         }
 
 
@@ -266,14 +266,13 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         // if we are inserting, we need to shift all exisisting samples to the right
         // in order to save time, we will insert a new vec with the size of the DAW buffer
 
-        if state.state == LooperState::Inserting {
-            let size = stereo_in.len();
-            let mut ins_buf: Vec<SamplePair> = Vec::with_capacity(size);
-            for _ in 0..size {
-                ins_buf.push((0.0,0.0));
+        match state.state {
+            LooperState::Inserting | LooperState::SyncStop(Commands::InsertStop) => {
+                let record_buffer = &mut state.buffer;
+                record_buffer.insert_empty(write_position, stereo_in.len());
+                info!("extended buffer at {} : {}, new len {}", write_position, stereo_in.len(), record_buffer.length());
             }
-            let mut record_buffer = &mut state.buffer;
-            record_buffer.buffer.splice(write_position..write_position, ins_buf.iter().cloned());
+            _ => {}
         }
 
         for (index, (left_in, right_in)) in stereo_in.enumerate() {
@@ -282,13 +281,23 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             let mut record_buffer = &mut state.buffer;
             // let play_buffer = &state.buffers[state.read_idx];
 
+            // see if we need to change the state for a sync stop
+            match state.state {
+                LooperState::SyncStop(command) => {
+                    let pos = write_position + index;
+                    if (pos >= state.sync_point) & (pos < state.sync_point + state.sync_window) {
+                        info!("sync point reached: {}/{} - stopping {} {} -> {}", state.sync_point, pos, state.state, command, state.return_state);
+
+                        state.state = state.return_state;
+                    };
+                }
+                _ => {}
+            }
 
             match state.state {
                 LooperState::Recording => {
                     // Push the new samples into the loop buffers.
-                    if index == 0 {
-                        // info!("record[{}]: {} / {}", state.loop_length, left_in.as_f32(), right_in.as_f32());
-                    }
+
                     if (state.write_position + index) < record_buffer.buffer.len() {
                         if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
                             *left_old = left_in.as_f32();
@@ -301,7 +310,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                     state.loop_length += 1;
                     state.cycle_len += 1;
                 }
-                LooperState::Inserting => {
+                LooperState::Inserting | LooperState::SyncStop(Commands::InsertStop) => {
                     if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
                         *left_old = left_in.as_f32();
                         *right_old = right_in.as_f32();
@@ -311,41 +320,26 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
 
                 }
                 LooperState::Overdubbing => {
-                    if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
-                        if index == 0 {
-                            // info!("overdub[{}]: {} / {}", write_position, left_old, right_old);
-                        }
-                        *left_old = (*left_old * WET_MULT) * state.feedback + left_in.as_f32();
-                        *right_old = (*right_old * WET_MULT) * state.feedback + right_in.as_f32();
-                    }
+                    record_buffer.overdub(write_position + index, (left_in.as_f32(), right_in.as_f32()), state.feedback);
+
                 }
-                LooperState::Replacing => {
-                    if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
-                        if index == 0 {
-                            // info!("replace[{}]: {} / {}", write_position, left_in.as_f32(), right_in.as_f32());
-                        }
-                        *left_old = left_in.as_f32();
-                        *right_old = right_in.as_f32();
-                    }
+                LooperState::Replacing | LooperState::SyncStop(Commands::ReplaceStop) => {
+                    record_buffer.overwrite(write_position + index, (left_in.as_f32(), right_in.as_f32()));
+
                 }
                 LooperState::SyncStart(command) => {
                     let pos = write_position + index;
                     if (pos >= state.sync_point) & (pos < state.sync_point + state.sync_window) {
-                        info!("sync point reached: {} - {}", state.sync_point, command);
+                        info!("sync point reached: {}/{} - {}", state.sync_point, pos, command);
                         state.state = match command {
                             Commands::ReplaceStart => LooperState::Replacing,
-                            Commands::InsertStart => LooperState::Inserting,
+                            Commands::InsertStart => {
+                                record_buffer.insert_empty(write_position + index, stereo_in_len - index);
+                                info!("switching, extended buffer at {} : {}, new len {}", write_position + index, stereo_in_len - index, record_buffer.length());
+                                LooperState::Inserting
+                            }
                             _ => state.state
                         }
-                    };
-                }
-
-                LooperState::SyncStop => {
-                    let pos = write_position + index;
-                    if (pos >= state.sync_point) & (pos < state.sync_point + state.sync_window) {
-                        info!("sync point reached: {} - stopping {} -> {}", state.sync_point, state.state, state.return_state);
-                        ;
-                        state.state = state.return_state;
                     };
                 }
 
@@ -379,9 +373,6 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                 _ => {
                     if let Some((left_old, right_old)) = play_buffer.buffer.get(play_position + index) {
                         const WET_MULT: f32 = 0.98;
-                        if index == 0 {
-                            // info!("play[{}]: {}/{}", play_position + index, left_old, right_old );
-                        }
 
                         left_processed = *left_old * WET_MULT;
                         right_processed = *right_old * WET_MULT;
@@ -396,7 +387,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         match state.state {
             // update the write position
             LooperState::Recording | LooperState::Inserting | LooperState::Overdubbing |
-            LooperState::Replacing | LooperState::SyncStart(_) | LooperState::SyncStop => {
+            LooperState::Replacing | LooperState::SyncStart(_) | LooperState::SyncStop(_) => {
                 state.write_position += stereo_in_len;
                 state.write_position = state.write_position % state.loop_length;
             }
@@ -414,7 +405,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             } else { 0 }
         }
 
-        // info!("loop_len / buf_len / write_pos / play_pos {} / {} / {} / {}", state.loop_length, rec_buffer_len, state.write_position, state.play_position);
+        // info!("loop_len / write_pos / play_pos {} / {} / {} ", state.loop_length, state.write_position, state.play_position);
 
 
         use vst::event::Event;
