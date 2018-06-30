@@ -45,7 +45,7 @@ impl RecordingBuffer {
     /// ```
     pub fn insert_empty(&mut self, at: usize, size: usize)  {
         let mut ins_buf: Vec<SamplePair> = Vec::with_capacity(size);
-        for i in 0..size {
+        for _ in 0..size {
             ins_buf.push((0.0, 0.0));
         }
         println!("len before: {}", self.buffer.len());
@@ -80,9 +80,6 @@ impl RecordingBuffer {
         }
     }
 
-    pub fn insert<I>(&mut self, idx: usize, insert: I) {
-        // self.buffer.splice(idx..idx, insert.iter().cloned());
-    }
 }
 
 impl Default for RecordingBuffer {

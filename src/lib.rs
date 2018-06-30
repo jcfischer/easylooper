@@ -36,7 +36,7 @@ use version::*;
 
 use easyvst::*;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod recording_buffer;
 
@@ -113,7 +113,10 @@ pub struct ELState {
     // a state change
     return_state: LooperState,
     events: Vec<MidiEvent>,
+
 }
+
+unsafe impl Sync for ELState {}
 
 impl UserState<ParamId> for ELState {
     fn param_changed(&mut self, _host: &mut HostCallback, param_id: ParamId, val: f32) {
@@ -140,7 +143,8 @@ type ELPluginState = PluginState<ParamId, ELState>;
 #[derive(Default)]
 struct ELPlugin {
     state: ELPluginState,
-    window: Option<ui::PluginWindow>,
+    ui: Option<UiState>,
+
 }
 
 impl ELPlugin {}
@@ -188,6 +192,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                 let _ = CombinedLogger::init(vec![WriteLogger::new(LevelFilter::Info,
                                                                    Config::default(), log_file)]);
                 info!("my folder {:?}", folder);
+                self.state.user_state.my_folder = folder;
             }
             Err(_e) => {}
         }
@@ -300,7 +305,6 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                         }
                         _ => {}
                     }
-
                 }
                 _ => {}
             }
@@ -486,27 +490,7 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
                     }
                     info!("new state: {}", state.state);
                     // info!("Size Buffer {}: {}", state.loop_index, buffer.buffer.len());
-                    match self.window {
-                        Some(window) => {
-                            match state.state {
-                                LooperState::Recording | LooperState::Overdubbing | LooperState::Replacing => {
-                                    window.state_label.set_text_color(Color::red());
-                                    window.counter.set_text_color(Color::red());
-                                }
-                                LooperState::Playing => {
-                                    window.state_label.set_text_color(Color::green());
-                                    window.counter.set_text_color(Color::green());
-                                }
-                                LooperState::Stopped | LooperState::Muted => {
-                                    window.state_label.set_text_color(Color::black());
-                                    window.counter.set_text_color(Color::black());
-                                }
-                                _ => {}
-                            }
-                            window.state_label.set_text(&state.state.to_string());
-                        }
-                        _ => {}
-                    };
+
                     state.events.push(ev);
                 }
                 _ => ()
@@ -514,27 +498,6 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
         }
 
         // state.send_buffer.send_events(events, &mut self.state.host)
-
-        match self.window {
-            Some(window) => {
-                let sample_rate = *state.sample_rate.read().unwrap().deref();
-                let seconds = state.play_position as f64 / sample_rate;
-                let seconds = format!("{:.*}", 2, seconds);
-                if seconds != state.seconds {
-                    window.counter.set_text(&seconds.to_string());
-                    state.seconds = seconds;
-                }
-
-                let cycles = format!("{} | {}", state.cycles, state.total_cycles);
-                let division = format!("{}", state.division);
-                let subdiv = format!("{} - {}", state.subdivision, state.sync_point);
-                window.cycle_label.set_text(&cycles.to_string());
-                window.division_label.set_text(&division.to_string());
-                window.subdiv_label.set_text(&subdiv.to_string());
-                window.state_label.set_text(&state.state.to_string());
-            }
-            _ => {}
-        };
     }
 
     fn can_do(&self, can_do: CanDo) -> vst::api::Supported {
@@ -595,20 +558,97 @@ use std::os::raw::c_void;
 const WINDOW_WIDTH: u32 = 480;
 const WINDOW_HEIGHT: u32 = 160;
 
+pub struct UiState {
+    window: ui::PluginWindow,
+}
+
+#[derive(Debug)]
+pub enum AppError {
+    UiCreationFail,
+}
+
+impl UiState {
+    pub fn new(my_folder: &Path, parent: *mut c_void) -> Option<Self> {
+        let window = ui::PluginWindow::new(Window::new_with_parent(parent).unwrap());
+        Some(UiState { window: window })
+    }
+
+    pub fn draw(&mut self, state: &mut ELState) {
+        let window = self.window;
+
+        let sample_rate = *state.sample_rate.read().unwrap().deref();
+        let seconds = state.play_position as f64 / sample_rate;
+        let seconds = format!("{:.*}", 2, seconds);
+        if seconds != state.seconds {
+            window.counter.set_text(&seconds.to_string());
+            state.seconds = seconds;
+        }
+
+        let cycles = format!("{} | {}", state.cycles, state.total_cycles);
+        let division = format!("{}", state.division);
+        let subdiv = format!("{} - {}", state.subdivision, state.sync_point);
+        window.cycle_label.set_text(&cycles.to_string());
+        window.division_label.set_text(&division.to_string());
+        window.subdiv_label.set_text(&subdiv.to_string());
+
+        match state.state {
+            LooperState::Recording | LooperState::Overdubbing | LooperState::Replacing => {
+                window.state_label.set_text_color(Color::red());
+                window.counter.set_text_color(Color::red());
+            }
+            LooperState::Playing => {
+                window.state_label.set_text_color(Color::green());
+                window.counter.set_text_color(Color::green());
+            }
+            LooperState::Stopped | LooperState::Muted => {
+                window.state_label.set_text_color(Color::black());
+                window.counter.set_text_color(Color::black());
+            }
+            _ => {}
+        }
+        window.state_label.set_text(&state.state.to_string());
+    }
+}
+
+
 impl Editor for ELPlugin {
     fn size(&self) -> (i32, i32) { (WINDOW_WIDTH as i32, WINDOW_HEIGHT as i32) }
 
     fn position(&self) -> (i32, i32) { (0, 0) }
 
-    fn close(&mut self) { self.window = None; }
-
-    fn idle(&mut self) {}
-
-    fn is_open(&mut self) -> bool { self.window.is_some() }
-
     fn open(&mut self, parent: *mut c_void) {
         info!("open {}", parent as usize);
-        self.window = Some(ui::PluginWindow::new(Window::new_with_parent(parent).unwrap()));
+
+        self.ui = UiState::new(&self.state.user_state.my_folder, parent);
+
+
+//        thread::spawn( || {
+//            match self.window {
+//                Some(window) => {
+//                    while true {
+//                        window.update();
+//                        thread::sleep(Duration::from_millis(15));
+//                    }
+//
+//                }
+//                _ => {}
+//            }
+//            info!("shutdown update thread");
+//        });
+    }
+
+    fn close(&mut self) {
+        self.ui = None;
+    }
+
+    fn idle(&mut self) {
+        if let Some(ref mut ui) = self.ui {
+            ui.draw(&mut self.state.user_state);
+        }
+    }
+
+    fn is_open(&mut self) -> bool {
+        self.ui.is_some()
     }
 }
 
