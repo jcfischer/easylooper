@@ -86,7 +86,10 @@ pub struct ELState {
     // index of Vec<rRecordingBuffer>
     cycle_len: usize,
     division_len: usize,
+    // which subdivision inside the cycle are we on
     subdivision: usize,
+    // when did we start a sync operation
+    sync_subdivision: usize,
 
     sync_point: usize,
     sync_window: usize,
@@ -278,150 +281,8 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             _ => {}
         }
 
-        for (index, (left_in, right_in)) in stereo_in.enumerate() {
-
-            // select the buffer we are recording into
-            let mut record_buffer = &mut state.buffer;
-            // let play_buffer = &state.buffers[state.read_idx];
-
-            // see if we need to change the state for a sync stop
-            match state.state {
-                LooperState::SyncStop(command) => {
-                    let pos = write_position + index;
-                    match command {
-                        Commands::ReplaceStop => {
-                            if (pos >= state.sync_point) & (pos < state.sync_point + state.sync_window) {
-                                info!("sync point reached: {}/{} - stopping {} {} -> {}", state.sync_point, pos, state.state, command, state.return_state);
-
-                                state.state = state.return_state;
-                            }
-                        }
-                        Commands::InsertStop => {
-                            if (pos % state.insert_sync_len) < state.sync_window {
-                                info!("insert sync point reached: {}/{} - stopping {} {} -> {}", state.insert_sync_len, pos, state.state, command, state.return_state);
-
-                                state.state = state.return_state;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-
-            match state.state {
-                LooperState::Recording => {
-                    // Push the new samples into the loop buffers.
-
-                    if (state.write_position + index) < record_buffer.buffer.len() {
-                        if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
-                            *left_old = left_in.as_f32();
-                            *right_old = right_in.as_f32();
-                        }
-                    } else {
-                        record_buffer.buffer.push((left_in.as_f32(), right_in.as_f32()));
-                    }
-
-                    state.loop_length += 1;
-                    state.cycle_len += 1;
-                }
-                LooperState::Inserting | LooperState::SyncStop(Commands::InsertStop) => {
-                    if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
-                        *left_old = left_in.as_f32();
-                        *right_old = right_in.as_f32();
-                        state.loop_length += 1;
-                        state.cycle_len += 1;
-                    }
-                }
-                LooperState::Overdubbing => {
-                    record_buffer.overdub(write_position + index, (left_in.as_f32(), right_in.as_f32()), state.feedback);
-                }
-                LooperState::Replacing | LooperState::SyncStop(Commands::ReplaceStop) => {
-                    record_buffer.overwrite(write_position + index, (left_in.as_f32(), right_in.as_f32()));
-                }
-                LooperState::SyncStart(command) => {
-                    let pos = write_position + index;
-                    if (pos >= state.sync_point) & (pos < state.sync_point + state.sync_window) {
-                        info!("sync point reached: {}/{} - {}", state.sync_point, pos, command);
-                        state.state = match command {
-                            Commands::ReplaceStart => LooperState::Replacing,
-                            Commands::InsertStart => {
-                                state.insert_sync_len = state.division_len; // store the current length of a subdivision
-                                record_buffer.insert_empty(write_position + index, stereo_in_len - index);
-                                // info!("switching, extended buffer at {} : {}, new len {}", write_position + index, stereo_in_len - index, record_buffer.length());
-                                LooperState::Inserting
-                            }
-                            _ => state.state
-                        }
-                    };
-                }
-
-                LooperState::Multiplying => {
-                    // copy from the currently playing buffer to the (new) recording buffer
-
-//                    if let Some((left_old, right_old)) = play_buffer.buffer.get(play_position + index) {
-//                        let left_new = (*left_old * WET_MULT) * state.feedback + left_in.as_f32();
-//                        let right_new = (*right_old * WET_MULT) * state.feedback + right_in.as_f32();
-//                        record_buffer.buffer.push_back((left_new.as_f32(), right_new.as_f32()));
-//                    }
-                }
-
-                _ => {}
-            }
-        }
-
-
-        // play back from the play buffer
-        for (index, (left_out, right_out)) in stereo_out.enumerate() {
-            let play_buffer = &state.buffer;
-
-            let mut left_processed: f32 = 0.0;
-            let mut right_processed: f32 = 0.0;
-
-            match state.state {
-                LooperState::Muted | LooperState::Stopped => {
-                    left_processed = 0. as f32;
-                    right_processed = 0. as f32;
-                }
-                _ => {
-                    if let Some((left_old, right_old)) = play_buffer.buffer.get(play_position + index) {
-                        const WET_MULT: f32 = 0.98;
-
-                        left_processed = *left_old * WET_MULT;
-                        right_processed = *right_old * WET_MULT;
-                    }
-                }
-            }
-
-            *left_out = left_processed.as_();
-            *right_out = right_processed.as_();
-        }
-
-        match state.state {
-            // update the write position
-            LooperState::Recording | LooperState::Inserting | LooperState::Overdubbing |
-            LooperState::Replacing | LooperState::SyncStart(_) | LooperState::SyncStop(_) => {
-                state.write_position += stereo_in_len;
-                state.write_position = state.write_position % state.loop_length;
-            }
-            _ => {}
-        }
-
-        if state.state != LooperState::Stopped {
-            state.play_position += stereo_out_len;
-            state.play_position = if state.loop_length > 0 {
-                state.play_position % state.loop_length
-            } else { 0 };
-            state.division_len = (state.cycle_len / state.division) as usize;
-            state.subdivision = if state.division_len > 0 {
-                (state.play_position / state.division_len) as usize
-            } else { 0 }
-        }
-
-        // info!("loop_len / write_pos / play_pos {} / {} / {} ", state.loop_length, state.write_position, state.play_position);
-
-
         use vst::event::Event;
+
 
         for e in events.events() {
             const A3_PITCH: u8 = 69;  // Record
@@ -497,7 +358,162 @@ impl EasyVst<ParamId, ELState> for ELPlugin {
             }
         }
 
-        // state.send_buffer.send_events(events, &mut self.state.host)
+//        let send_buffer = &mut state.send_buffer;
+//        send_buffer.store_midi(&self.state.user_state.events);
+//        self.state.host.process_events(send_buffer.events());
+        state.events.clear();
+
+        for (index, (left_in, right_in)) in stereo_in.enumerate() {
+
+            // select the buffer we are recording into
+            let mut record_buffer = &mut state.buffer;
+            // let play_buffer = &state.buffers[state.read_idx];
+
+            // see if we need to change the state for a sync stop
+            match state.state {
+                LooperState::SyncStop(command) => {
+                    let pos = write_position + index;
+                    match command {
+                        Commands::ReplaceStop => {
+                            // if we are not in the same subdivision then see if we can stop the replace
+                            if state.sync_subdivision != state.subdivision {
+                                if (pos >= state.sync_point) & (pos < state.sync_point + state.sync_window) {
+                                    info!("sync point reached: {}/{} - stopping {} {} -> {}", state.sync_point, pos, state.state, command, state.return_state);
+
+                                    state.state = state.return_state;
+                                    state.sync_subdivision = 0;
+                                }
+                            } else {
+                                // info!("Not stopping, still in same subdivision");
+                            }
+                        }
+                        Commands::InsertStop => {
+                            if (pos % state.insert_sync_len) < state.sync_window {
+                                info!("insert sync point reached: {}/{} - stopping {} {} -> {}", state.insert_sync_len, pos, state.state, command, state.return_state);
+
+                                state.state = state.return_state;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+
+            match state.state {
+                LooperState::Recording => {
+                    // Push the new samples into the loop buffers.
+
+                    if (state.write_position + index) < record_buffer.buffer.len() {
+                        if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
+                            *left_old = left_in.as_f32();
+                            *right_old = right_in.as_f32();
+                        }
+                    } else {
+                        record_buffer.buffer.push((left_in.as_f32(), right_in.as_f32()));
+                    }
+
+                    state.loop_length += 1;
+                    state.cycle_len += 1;
+                }
+                LooperState::Inserting | LooperState::SyncStop(Commands::InsertStop) => {
+                    if let Some((left_old, right_old)) = record_buffer.buffer.get_mut(write_position + index) {
+                        *left_old = left_in.as_f32();
+                        *right_old = right_in.as_f32();
+                        state.loop_length += 1;
+                        state.cycle_len += 1;
+                    }
+                }
+                LooperState::Overdubbing => {
+                    record_buffer.overdub(write_position + index, (left_in.as_f32(), right_in.as_f32()), state.feedback);
+                }
+                LooperState::Replacing | LooperState::SyncStop(Commands::ReplaceStop) => {
+                    record_buffer.overwrite(write_position + index, (left_in.as_f32(), right_in.as_f32()));
+                }
+                LooperState::SyncStart(command) => {
+                    let pos = write_position + index;
+                    if (pos >= state.sync_point) & (pos < state.sync_point + state.sync_window) {
+                        info!("sync point reached: {}/{} - {}", state.sync_point, pos, command);
+                        state.state = match command {
+                            Commands::ReplaceStart => {
+                                // store the current subdivision, so we don't stop replacing too soon
+                                state.sync_subdivision = state.subdivision;
+                                LooperState::Replacing
+                            } ,
+                            Commands::InsertStart => {
+                                state.insert_sync_len = state.division_len; // store the current length of a subdivision
+                                record_buffer.insert_empty(write_position + index, stereo_in_len - index);
+                                // info!("switching, extended buffer at {} : {}, new len {}", write_position + index, stereo_in_len - index, record_buffer.length());
+                                LooperState::Inserting
+                            }
+                            _ => state.state
+                        }
+                    };
+                }
+
+                LooperState::Multiplying => {
+                    // copy from the currently playing buffer to the (new) recording buffer
+
+//                    if let Some((left_old, right_old)) = play_buffer.buffer.get(play_position + index) {
+//                        let left_new = (*left_old * WET_MULT) * state.feedback + left_in.as_f32();
+//                        let right_new = (*right_old * WET_MULT) * state.feedback + right_in.as_f32();
+//                        record_buffer.buffer.push_back((left_new.as_f32(), right_new.as_f32()));
+//                    }
+                }
+
+                _ => {}
+            }
+        }
+
+
+        // play back from the play buffer
+        for (index, (left_out, right_out)) in stereo_out.enumerate() {
+            let play_buffer = &state.buffer;
+
+            let mut left_processed: f32 = 0.0;
+            let mut right_processed: f32 = 0.0;
+
+            match state.state {
+                LooperState::Muted | LooperState::Stopped => {
+                    left_processed = 0. as f32;
+                    right_processed = 0. as f32;
+                }
+                _ => {
+                    if let Some((left_old, right_old)) = play_buffer.buffer.get(play_position + index) {
+                        const WET_MULT: f32 = 0.98;
+
+                        left_processed = *left_old * WET_MULT;
+                        right_processed = *right_old * WET_MULT;
+                    }
+                }
+            }
+
+            *left_out = left_processed.as_();
+            *right_out = right_processed.as_();
+        }
+
+        match state.state {
+            // update the write position
+            LooperState::Recording | LooperState::Inserting | LooperState::Overdubbing |
+            LooperState::Replacing | LooperState::SyncStart(_) | LooperState::SyncStop(_) => {
+                state.write_position += stereo_in_len;
+                state.write_position = state.write_position % state.loop_length;
+            }
+            _ => {}
+        }
+
+        if state.state != LooperState::Stopped {
+            state.play_position += stereo_out_len;
+            state.play_position = if state.loop_length > 0 {
+                state.play_position % state.loop_length
+            } else { 0 };
+            state.division_len = (state.cycle_len / state.division) as usize;
+            state.subdivision = if state.division_len > 0 {
+                (state.play_position / state.division_len) as usize
+            } else { 0 }
+        }
+
+        // info!("loop_len / write_pos / play_pos {} / {} / {} ", state.loop_length, state.write_position, state.play_position);
     }
 
     fn can_do(&self, can_do: CanDo) -> vst::api::Supported {

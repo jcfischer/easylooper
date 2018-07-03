@@ -24,7 +24,11 @@ Features
 * Insert (Extend the loop with new material)
 * Sync to subdivisions (Replace and Insert will start/stop at next subdivision of loop length)
 * MIDI Control of above functions - currently hard coded to specific NoteOn/Off values
-
+* Quantized replace: replace exactly the next subdivision with new material 
+  [Quantized Replace](https://www.youtube.com/watch?v=g836XoN5plY&t=305s).
+  Fails when stop event happens before the start event could fire (when syncing to very long subdivisions and 
+  just tapping a short midi event)
+  
 Todo (roughly in order of priority)
 -----------------------------------
 
@@ -32,7 +36,6 @@ Todo (roughly in order of priority)
   signal in the recorded buffer
 * Handle MIDI events in the correct order
 * Smooth transistions between replaces/inserts to remove some of the glitching
-* Quantized replace: replace exactly the next subdivision with new material [Quantized Replace](https://www.youtube.com/watch?v=g836XoN5plY&t=305s)
 * Quantize Modes (Off, Loop, Cycle, 8ths): and have the various functions respect the quantize mode
 * Multiply: Extend the loop by repeating cycles [Multiply](https://www.youtube.com/watch?v=VmenN10KclQ)
 * Unrounded Multiply: Extend or shorten the loop 
