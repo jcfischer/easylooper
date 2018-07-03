@@ -30,6 +30,8 @@ Todo (roughly in order of priority)
 
 * Correct handling of Feedback: on the Echoplex, the feedback control works during playback and reduces the amout of 
   signal in the recorded buffer
+* Handle MIDI events in the correct order
+* Smooth transistions between replaces/inserts to remove some of the glitching
 * Quantized replace: replace exactly the next subdivision with new material [Quantized Replace](https://www.youtube.com/watch?v=g836XoN5plY&t=305s)
 * Quantize Modes (Off, Loop, Cycle, 8ths): and have the various functions respect the quantize mode
 * Multiply: Extend the loop by repeating cycles [Multiply](https://www.youtube.com/watch?v=VmenN10KclQ)
