@@ -1,11 +1,11 @@
 PlexLooper
 ==========
 
-PlexLooper is a a VST audio plugin that allows for looping of audio material.
+PlexLooper is a VST audio plugin that allows for looping of audio material.
 It's feature set is loosely based on the [Echoplex](http://www.loopers-delight.com/tools/echoplex/echoplex.html) looper 
 by Gibson/Oberheim.
 
-Currently only works on OSX due to the UI library being used. Tested in Ableton Live 10 and Reaper 9.5
+Currently only works on OSX due to the UI library being used. Tested in Ableton Live 10.
 
 Building
 --------
